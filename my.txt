@@ -3,6 +3,8 @@ docker
 docker-compose
 postgresql-client
 
+Нужно разaрхевировать бд
+
 Поднятие бд
 docker-compose up -d --build
 
