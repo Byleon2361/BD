@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: demo_big
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./demo-big-20170815.sql:/docker-entrypoint-initdb.d/01-demo.sql
+      - ./init-settings.sql:/docker-entrypoint-initdb.d/02-settings.sql
+      - ./init-pgbench.sql:/docker-entrypoint-initdb.d/03-pgbench.sql
+      - ./postgres-config.sh:/docker-entrypoint-initdb.d/postgres-config.sh
+volumes:
+  postgres_data:
