@@ -11,3 +11,28 @@ max_connections=200
 10. Выполните перестроение объектов pgbench, измерьте размер таблиц и индексов pgbench.
 11. Разрешите подключение приложений.
 12. Повторите нагрузочный тест.
+
+
+------
+Должны быть усатновлены
+docker
+docker-compose
+postgresql-client
+
+Нужно разaрхевировать бд
+
+Поднятие бд
+docker-compose up -d --build
+
+Проверка памяти
+❯ docker exec -it bd-postgres-1 psql -U postgres -d demo_big -c "SHOW maintenance_work_mem;"
+
+войтв в бд
+docker exec -it bd-postgres-1 psql -U postgres -d demo_big
+
+ALTER SYSTEM SET maintenance_work_mem = '128MB';
+ALTER SYSTEM SET max_connections = 200;
+SELECT pg_reload_conf();
+
+выйти из бд
+\q 
