@@ -1,10 +1,10 @@
 FROM postgres:15
 
 # Копируем SQL-дамп
-COPY demo-big-20170815.sql /docker-entrypoint-initdb.d/
+COPY complete_news_database.sql /docker-entrypoint-initdb.d/
 
 # Устанавливаем переменные окружения для настроек PostgreSQL
-ENV POSTGRES_DB=demo_big
+ENV POSTGRES_DB=new_bd
 ENV POSTGRES_USER=postgres
 ENV POSTGRES_PASSWORD=password
 
