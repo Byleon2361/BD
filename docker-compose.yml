@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./complete_news_database.sql:/docker-entrypoint-initdb.d/complete_news_database.sql
+      - ./complete_news_database_postgres.sql:/docker-entrypoint-initdb.d/complete_news_database_postgres.sql
       - ./postgres-config.sh:/docker-entrypoint-initdb.d/postgres-config.sh
 volumes:
   postgres_data:

@@ -1,7 +1,7 @@
 FROM postgres:15
 
 # Копируем SQL-дамп
-COPY complete_news_database.sql /docker-entrypoint-initdb.d/
+COPY complete_news_database_postgres.sql /docker-entrypoint-initdb.d/
 
 # Устанавливаем переменные окружения для настроек PostgreSQL
 ENV POSTGRES_DB=new_bd
