@@ -21,4 +21,6 @@ business_queries_postgres.sql - это тествой запросы.
 docker exec -it bd-postgres-1 psql -U postgres -l
 
 Эта команда выполняет все тестове запросы, которые описаны в задании 3.
- docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f - < business_queries_postgres.sql
+ docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f - < aggregating_queries.sql
+ docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f - < window_functions.sql
+ docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f - < queries_with_joined_tables.sql
