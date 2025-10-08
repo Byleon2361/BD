@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Папка для бэкапов - замените на свою
-BACKUP_DIR="/Users/ilyasuharenko/Documents/BD/backups"
+BACKUP_DIR="./backups"
 mkdir -p "$BACKUP_DIR"
 
 # Текущая дата
