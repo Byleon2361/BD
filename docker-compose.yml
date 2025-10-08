@@ -2,6 +2,7 @@ version: '3.8'
 services:
   postgres:
     image: postgres:15
+    container_name: bd-postgres-1
     ports:
       - "5432:5432"
     environment:
@@ -12,5 +13,40 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./complete_news_database_postgres.sql:/docker-entrypoint-initdb.d/complete_news_database_postgres.sql
       - ./postgres-config.sh:/docker-entrypoint-initdb.d/postgres-config.sh
+    networks:
+      - bd_default
+
+  postgres-replica:
+    image: postgres:15
+    container_name: bd-postgres-replica
+    depends_on:
+      - postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    networks:
+      - bd_default
+    command: >
+      bash -c "
+      until pg_isready -h postgres -p 5432; do
+        echo 'Waiting for primary database...'
+        sleep 2
+      done
+      && echo 'Primary database is ready, starting replica...'
+      && cp /usr/share/postgresql/postgresql.conf.sample /var/lib/postgresql/data/postgresql.conf
+      && echo \"primary_conninfo = 'host=postgres port=5432 user=replicator password=replica_pass application_name=bd-postgres-replica'\" >> /var/lib/postgresql/data/postgresql.conf
+      && echo \"hot_standby = on\" >> /var/lib/postgresql/data/postgresql.conf
+      && chown postgres:postgres /var/lib/postgresql/data/postgresql.conf
+      && docker-entrypoint.sh postgres
+      "
+
 volumes:
   postgres_data:
+  postgres_replica_data:
+
+networks:
+  bd_default:
+    driver: bridge

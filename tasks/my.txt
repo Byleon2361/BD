@@ -1,0 +1,8 @@
+Список всех контейнеров показывает
+docker ps -a
+
+Проверка какие есть бд к контейнере 
+docker exec bd-postgres-replica psql -U postgres -c "\l"
+
+Выполнение sql запросов
+ docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f - < queries_with_joined_tables.sql
