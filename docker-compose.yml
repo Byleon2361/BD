@@ -31,10 +31,15 @@ services:
       - bd_default
     command: >
       bash -c "
-      cat > /var/lib/postgresql/data/postgresql.auto.conf <<'EOF'
-      primary_conninfo = 'host=bd-postgres-1 port=5432 user=replicator password=replica_pass application_name=bd-postgres-replica'
-      EOF
-      && chown postgres:postgres /var/lib/postgresql/data/postgresql.auto.conf
+      until pg_isready -h postgres -p 5432; do
+        echo 'Waiting for primary database...'
+        sleep 2
+      done
+      && echo 'Primary database is ready, starting replica...'
+      && cp /usr/share/postgresql/postgresql.conf.sample /var/lib/postgresql/data/postgresql.conf
+      && echo \"primary_conninfo = 'host=postgres port=5432 user=replicator password=replica_pass application_name=bd-postgres-replica'\" >> /var/lib/postgresql/data/postgresql.conf
+      && echo \"hot_standby = on\" >> /var/lib/postgresql/data/postgresql.conf
+      && chown postgres:postgres /var/lib/postgresql/data/postgresql.conf
       && docker-entrypoint.sh postgres
       "
 
@@ -44,3 +49,4 @@ volumes:
 
 networks:
   bd_default:
+    driver: bridge
