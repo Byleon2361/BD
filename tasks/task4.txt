@@ -5,3 +5,15 @@
 4. Посмотреть разницу между logged и unlogged таблицами. Выполнить замеры на вставку, чтение, удаление (вставлять записи по одной/группой)
 5. Реализовать запросы для разработанных кейсов.
 P.S. Все результаты замеров сохранить с указанием входных условий.
+
+Добавить запись в основную бд
+docker exec -it bd-postgres-1 psql -U postgres -d news_aggregator -c "
+  CREATE TABLE IF NOT EXISTS test_replication (id SERIAL PRIMARY KEY, data TEXT, created_at TIMESTAMP DEFAULT NOW());
+  INSERT INTO test_replication (data) VALUES ('test data from primary');
+  "
+
+Проверка добавилась ли запись в реплике
+docker exec -it bd-postgres-replica psql -U postgres -d news_aggregator -c "SELECT * FROM test_replication;"
+
+Удаленик записи из бд 
+docker exec -it bd-postgres-1 psql -U postgres -d news_aggregator -c "DELETE FROM test_replication WHERE id = 1;"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # full-benchmark.sh
 CONTAINER_NAME="bd-postgres-1"
-DB_NAME="demo_big"
+DB_NAME="news_aggregator"
 
 echo "=== PostgreSQL Benchmark Test ==="
 
