@@ -18,7 +18,7 @@ services:
       bash -c "
         # Запускаем стандартный entrypoint в фоне
         docker-entrypoint.sh postgres &
-        PG_PID=$!
+        PG_PID=$$!
         
         # Ждем запуска БД
         until pg_isready -U postgres; do
@@ -43,7 +43,7 @@ services:
         echo 'Primary database configured for replication'
         
         # Ждем завершения основного процесса PostgreSQL
-        wait $PG_PID
+        wait $$PG_PID
       "
 
   postgres-replica:
