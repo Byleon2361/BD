@@ -1,0 +1,17 @@
+{
+  "name": "news-aggregator-api",
+  "version": "1.0.0",
+  "description": "REST API for MongoDB News Aggregator",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongodb": "^5.8.0"
+  },
+  "keywords": ["mongodb", "news", "api", "aggregator"],
+  "author": "News Aggregator Team",
+  "license": "MIT"
+}
