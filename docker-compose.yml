@@ -12,9 +12,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./complete_news_database_postgres.sql:/docker-entrypoint-initdb.d/complete_news_database_postgres.sql
+      - ./postgres-config.sh:/docker-entrypoint-initdb.d/postgres-config.sh
     networks:
       - bd_default
     command: >
+     postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c shared_buffers=512MB
+      -c work_mem=32MB
+      -c maintenance_work_mem=128MB
       bash -c "
         # Запускаем стандартный entrypoint в фоне
         docker-entrypoint.sh postgres &
