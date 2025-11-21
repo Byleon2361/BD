@@ -1,0 +1,64 @@
+{
+  "dashboard": {
+    "title": "PostgreSQL Optimization Progress",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Optimization Progress",
+        "type": "stat",
+        "targets": [
+          {
+            "rawSql": "SELECT ROUND(100.0 * completed_steps / total_steps, 1) as progress FROM optimization_metrics WHERE optimization_name = 'index_optimization'",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 50, "color": "yellow"},
+                {"value": 100, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Completed Steps",
+        "type": "stat",
+        "targets": [
+          {
+            "rawSql": "SELECT COUNT(*) as completed FROM optimization_progress WHERE status = 'completed'",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "value"}
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Recent Steps",
+        "type": "table",
+        "targets": [
+          {
+            "rawSql": "SELECT step_name, status, execution_time_ms as time_ms FROM optimization_progress ORDER BY created_at DESC LIMIT 5",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 10, "w": 24, "x": 0, "y": 8}
+      }
+    ],
+    "refresh": "10s"
+  }
+}

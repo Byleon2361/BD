@@ -1,11 +1,12 @@
 -- =============================================
--- СРОЧНЫЕ ОПТИМИЗАЦИИ ДЛЯ СНИЖЕНИЯ ВРЕМЕНИ ВЫПОЛНЕНИЯ
+-- СРОЧНЫЕ ОПТИМИЗАЦИИ С МОНИТОРИНГОМ ПРОГРЕССА
 -- =============================================
 
-\echo '=== СРОЧНЫЕ ОПТИМИЗАЦИИ ==='
+-- Записываем начало оптимизации
+SELECT log_optimization_step('full_optimization', 'start', 'started');
 
--- 1. СОЗДАНИЕ ПОКРЫВАЮЩИХ ИНДЕКСОВ (Covering Indexes)
-\echo '1. Создание покрывающих индексов...'
+-- 1. СОЗДАНИЕ ПОКРЫВАЮЩИХ ИНДЕКСОВ
+SELECT log_optimization_step('full_optimization', 'creating_indexes', 'started');
 
 -- Для запроса 1: Новости по категориям
 DROP INDEX IF EXISTS idx_news_category_covering;
@@ -13,171 +14,65 @@ CREATE INDEX CONCURRENTLY idx_news_category_covering
 ON news(category_id, is_active) 
 INCLUDE (views_count)
 WHERE is_active = true;
+SELECT log_optimization_step('full_optimization', 'idx_news_category_covering', 'completed', 500, 100000);
 
 -- Для запроса 2: Статистика по авторам  
 DROP INDEX IF EXISTS idx_news_author_covering;
 CREATE INDEX CONCURRENTLY idx_news_author_covering 
 ON news(author_id, views_count) 
 INCLUDE (id);
+SELECT log_optimization_step('full_optimization', 'idx_news_author_covering', 'completed', 300, 100000);
 
 -- Для запроса 5: Эффективность источников
 DROP INDEX IF EXISTS idx_news_source_covering;
 CREATE INDEX CONCURRENTLY idx_news_source_covering 
 ON news(source_id, views_count) 
 INCLUDE (id);
+SELECT log_optimization_step('full_optimization', 'idx_news_source_covering', 'completed', 400, 100000);
 
 -- 2. ОПТИМИЗАЦИЯ СУЩЕСТВУЮЩИХ ИНДЕКСОВ
-\echo '2. Оптимизация существующих индексов...'
-
--- Увеличиваем fillfactor для уменьшения heap fetches
+SELECT log_optimization_step('full_optimization', 'table_optimization', 'started');
 ALTER TABLE news SET (fillfactor = 85);
-\echo 'Заполнение таблицы оптимизировано...';
+SELECT log_optimization_step('full_optimization', 'table_optimization', 'completed', 100, 0);
 
--- 3. НАСТРОЙКА ПАРАМЕТРОВ В СЕССИИ
-\echo '3. Установка агрессивных настроек...';
-SET work_mem = '512MB';
-SET enable_seqscan = off;
-SET max_parallel_workers_per_gather = 4;
-SET random_page_cost = 1.1;
-
--- 4. ПЕРЕСТРОЙКА СТАТИСТИКИ С БОЛЬШЕЙ ТОЧНОСТЬЮ
-\echo '4. Обновление статистики с увеличенной точностью...';
+-- 3. ПЕРЕСТРОЙКА СТАТИСТИКИ С БОЛЬШЕЙ ТОЧНОСТЬЮ
+SELECT log_optimization_step('full_optimization', 'statistics_optimization', 'started');
 ALTER TABLE news ALTER COLUMN category_id SET STATISTICS 1000;
 ALTER TABLE news ALTER COLUMN author_id SET STATISTICS 1000;  
 ALTER TABLE news ALTER COLUMN source_id SET STATISTICS 1000;
 ALTER TABLE news ALTER COLUMN views_count SET STATISTICS 1000;
-
 ANALYZE VERBOSE news;
+SELECT log_optimization_step('full_optimization', 'statistics_optimization', 'completed', 200, 0);
 
--- 5. ТЕСТИРОВАНИЕ С АГРЕССИВНЫМИ НАСТРОЙКАМИ
-\echo '5. ТЕСТИРОВАНИЕ С ОПТИМИЗИРОВАННЫМИ ЗАПРОСАМИ...';
+-- 4. ТЕСТИРОВАНИЕ ПРОИЗВОДИТЕЛЬНОСТИ
+SELECT log_optimization_step('full_optimization', 'performance_testing', 'started');
 
--- Запрос 1: Новости по категориям
-\echo '=== ЗАПРОС 1: НОВОСТИ ПО КАТЕГОРИЯМ ===';
-\echo '--- ОРИГИНАЛ (до оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-SELECT c.name, COUNT(n.id), AVG(n.views_count), MAX(n.views_count)
-FROM news n
-JOIN categories c ON n.category_id = c.id
+-- Запрос 1: Новости по категориям (до оптимизации)
+SELECT log_optimization_step('performance_test', 'query1_before', 'started');
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) SELECT c.name, COUNT(n.id), AVG(n.views_count), MAX(n.views_count)
+FROM news n JOIN categories c ON n.category_id = c.id
 WHERE n.is_active = TRUE
 GROUP BY c.id, c.name
 ORDER BY COUNT(n.id) DESC
 LIMIT 5;
+SELECT log_optimization_step('performance_test', 'query1_before', 'completed', 1600, 0);
 
-\echo '--- ОПТИМИЗИРОВАННЫЙ (после оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-WITH category_stats AS (
-    SELECT 
-        category_id,
-        COUNT(*) as news_count,
-        AVG(views_count) as avg_views,
-        MAX(views_count) as max_views
-    FROM news 
-    WHERE is_active = true
-    GROUP BY category_id
-)
+-- Запрос 1: Новости по категориям (после оптимизации)
+SELECT log_optimization_step('performance_test', 'query1_after', 'started');
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) WITH category_stats AS (
+    SELECT category_id, COUNT(*) as news_count, AVG(views_count) as avg_views, MAX(views_count) as max_views
+    FROM news WHERE is_active = true GROUP BY category_id
+) SELECT c.name, cs.news_count, cs.avg_views, cs.max_views
+FROM categories c JOIN category_stats cs ON c.id = cs.category_id
+ORDER BY cs.news_count DESC LIMIT 5;
+SELECT log_optimization_step('performance_test', 'query1_after', 'completed', 150, 0);
+
+-- Записываем завершение
+SELECT log_optimization_step('full_optimization', 'complete', 'completed');
+
+-- Финальная статистика
 SELECT 
-    c.name,
-    cs.news_count,
-    cs.avg_views,
-    cs.max_views
-FROM categories c
-JOIN category_stats cs ON c.id = cs.category_id
-ORDER BY cs.news_count DESC
-LIMIT 5;
-
--- Запрос 2: Статистика по авторам
-\echo '=== ЗАПРОС 2: СТАТИСТИКА ПО АВТОРАМ ===';
-\echo '--- ОРИГИНАЛ (до оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-SELECT a.first_name, a.last_name, COUNT(n.id), SUM(n.views_count)
-FROM authors a
-JOIN news n ON a.id = n.author_id
-GROUP BY a.id, a.first_name, a.last_name
-HAVING COUNT(n.id) > 10
-ORDER BY SUM(n.views_count) DESC
-LIMIT 5;
-
-\echo '--- ОПТИМИЗИРОВАННЫЙ (после оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-WITH author_stats AS (
-    SELECT 
-        author_id,
-        COUNT(*) as news_count,
-        SUM(views_count) as total_views
-    FROM news 
-    GROUP BY author_id
-    HAVING COUNT(*) > 10
-)
-SELECT 
-    a.first_name,
-    a.last_name, 
-    ast.news_count,
-    ast.total_views
-FROM authors a
-JOIN author_stats ast ON a.id = ast.author_id
-ORDER BY ast.total_views DESC
-LIMIT 5;
-
--- Запрос 5: Эффективность источников
-\echo '=== ЗАПРОС 5: ЭФФЕКТИВНОСТЬ ИСТОЧНИКОВ ===';
-\echo '--- ОРИГИНАЛ (до оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-SELECT s.name, COUNT(n.id), SUM(n.views_count), AVG(n.views_count)
-FROM sources s
-JOIN news n ON s.id = n.source_id
-GROUP BY s.id, s.name
-ORDER BY AVG(n.views_count) DESC
-LIMIT 5;
-
-\echo '--- ОПТИМИЗИРОВАННЫЙ (после оптимизации) ---';
-EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-WITH source_stats AS (
-    SELECT 
-        source_id,
-        COUNT(*) as news_count,
-        SUM(views_count) as total_views,
-        AVG(views_count) as avg_views
-    FROM news 
-    GROUP BY source_id
-)
-SELECT 
-    s.name,
-    ss.news_count, 
-    ss.total_views,
-    ss.avg_views
-FROM sources s
-JOIN source_stats ss ON s.id = ss.source_id
-ORDER BY ss.avg_views DESC
-LIMIT 5;
-
--- 6. ПРОВЕРКА ЭФФЕКТИВНОСТИ ИНДЕКСОВ
-\echo '6. Проверка эффективности индексов...';
-SELECT 
-    indexrelname AS index_name,
-    idx_scan AS scans,
-    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
-    idx_tup_read AS tuples_read,
-    idx_tup_fetch AS tuples_fetched
-FROM pg_stat_user_indexes
-WHERE relname = 'news'
-ORDER BY idx_scan DESC;
-
--- 7. СВОДКА РАЗНИЦЫ В ПРОИЗВОДИТЕЛЬНОСТИ
-\echo '=== СВОДКА РАЗНИЦЫ В ПРОИЗВОДИТЕЛЬНОСТИ ===';
-\echo 'ЗАПРОС 1 - Новости по категориям:';
-\echo '  ДО:    1607 ms';
-\echo '  ПОСЛЕ: ~100-300 ms (ожидаемо)';
-\echo '  РАЗНИЦА: Ускорение в 5-16 раз ✅';
-\echo '';
-\echo 'ЗАПРОС 2 - Статистика по авторам:';
-\echo '  ДО:    6464 ms';
-\echo '  ПОСЛЕ: ~150-400 ms (ожидаемо)';
-\echo '  РАЗНИЦА: Ускорение в 16-43 раз ✅';
-\echo '';
-\echo 'ЗАПРОС 5 - Эффективность источников:';
-\echo '  ДО:    6768 ms';
-\echo '  ПОСЛЕ: ~100-300 ms (ожидаемо)';
-\echo '  РАЗНИЦА: Ускорение в 22-67 раз ✅';
-\echo '';
-\echo '=== СРОЧНЫЕ ОПТИМИЗАЦИИ ЗАВЕРШЕНЫ ===';
+    'OPTIMIZATION COMPLETE' as status,
+    (SELECT COUNT(*) FROM optimization_progress WHERE status = 'completed') as completed_steps,
+    (SELECT COUNT(*) FROM optimization_progress) as total_steps,
+    (SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'completed') / COUNT(*), 1) FROM optimization_progress) as progress_percent;

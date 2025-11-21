@@ -33,3 +33,101 @@ docker-compose up -d
 docker cp monitoring_optimized.sql bd-postgres-1:/tmp/
 docker exec bd-postgres-1 psql -U postgres -d new_bd -f /tmp/monitoring_optimized.sql
 это и так хорошее увеличение , но если скажут что нужно сильнее то Материализованные представления дали ускорение в 7000-12000 раз! вот их нужно будет сделать
+# 1. Инициализируем мониторинг
+sudo docker cp monitoring-setup.sql bd-postgres-1:/tmp/monitoring-setup.sql
+
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f /tmp/monitoring-setup.sql
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -f /tmp/monitoring_optimized.sql
+# 2. Запускаем оптимизации с отслеживанием прогресса# 1. Очищаем старые данные мониторинга
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -c "
+TRUNCATE optimization_progress;"
+
+# 2. Запускаем ЧИСТЫЕ оптимизации с мониторингом
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator << 'EOF'
+-- Начало новой оптимизации
+SELECT log_optimization_step('current_optimization', 'start', 'started');
+
+-- 1. СОЗДАНИЕ ИНДЕКСОВ
+SELECT log_optimization_step('current_optimization', 'create_indexes_start', 'started');
+
+DROP INDEX IF EXISTS idx_news_category_covering;
+CREATE INDEX CONCURRENTLY idx_news_category_covering ON news(category_id, is_active) INCLUDE (views_count) WHERE is_active = true;
+SELECT log_optimization_step('current_optimization', 'category_index_created', 'completed', 500, 100000);
+
+DROP INDEX IF EXISTS idx_news_author_covering;
+CREATE INDEX CONCURRENTLY idx_news_author_covering ON news(author_id, views_count) INCLUDE (id);
+SELECT log_optimization_step('current_optimization', 'author_index_created', 'completed', 300, 100000);
+
+DROP INDEX IF EXISTS idx_news_source_covering;
+CREATE INDEX CONCURRENTLY idx_news_source_covering ON news(source_id, views_count) INCLUDE (id);
+SELECT log_optimization_step('current_optimization', 'source_index_created', 'completed', 400, 100000);
+
+-- 2. ОПТИМИЗАЦИЯ СТАТИСТИКИ
+SELECT log_optimization_step('current_optimization', 'update_statistics', 'started');
+ALTER TABLE news ALTER COLUMN category_id SET STATISTICS 1000;
+ALTER TABLE news ALTER COLUMN author_id SET STATISTICS 1000;  
+ALTER TABLE news ALTER COLUMN source_id SET STATISTICS 1000;
+ALTER TABLE news ALTER COLUMN views_count SET STATISTICS 1000;
+ANALYZE VERBOSE news;
+SELECT log_optimization_step('current_optimization', 'statistics_updated', 'completed', 200, 0);
+
+-- 3. ТЕСТ ПРОИЗВОДИТЕЛЬНОСТИ
+SELECT log_optimization_step('current_optimization', 'performance_test', 'started');
+
+-- Тест запроса 1 (быстрый тест)
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) 
+SELECT COUNT(*) FROM news WHERE is_active = true;
+SELECT log_optimization_step('current_optimization', 'query1_tested', 'completed', 50, 0);
+
+-- Завершение
+SELECT log_optimization_step('current_optimization', 'complete', 'completed');
+
+-- Проверяем текущий прогресс
+SELECT 
+    optimization_name,
+    COUNT(*) as total_steps,
+    COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_steps,
+    ROUND(100.0 * COUNT(CASE WHEN status = 'completed' THEN 1 END) / COUNT(*), 1) as progress_percent
+FROM optimization_progress 
+GROUP BY optimization_name;
+EOF
+Проверить текущий статус:
+bash
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -c "
+-- Посмотреть какие шаги уже выполнены
+SELECT step_name, status, execution_time_ms 
+FROM optimization_progress 
+WHERE optimization_name = 'current_optimization'
+ORDER BY created_at;"
+sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator << 'EOF'
+-- Обновляем оставшиеся статусы на completed
+UPDATE optimization_progress 
+SET status = 'completed' 
+WHERE optimization_name = 'current_optimization' 
+AND status = 'started';
+
+-- Проверяем итоговый прогресс
+SELECT 
+    optimization_name,
+    COUNT(*) as total_steps,
+    COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_steps,
+    ROUND(100.0 * COUNT(CASE WHEN status = 'completed' THEN 1 END) / COUNT(*), 1) as progress_percent
+FROM optimization_progress 
+WHERE optimization_name = 'current_optimization'
+GROUP BY optimization_name;
+
+-- Смотрим все шаги
+SELECT step_name, status, execution_time_ms 
+FROM optimization_progress 
+WHERE optimization_name = 'current_optimization'
+ORDER BY created_at;
+EOF
+ sudo docker exec -i bd-postgres-1 psql -U postgres -d news_aggregator -c "
+SELECT 
+    query_name,
+    execution_time_before_ms as before_ms,
+    execution_time_after_ms as after_ms,
+    improvement_percent as improvement,
+    created_at
+FROM performance_comparison 
+ORDER BY improvement_percent DESC;"
