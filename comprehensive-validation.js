@@ -49,6 +49,12 @@ print(`   ✅ Unique Index: ${hasUniqueIndex}`);
 print(`   ✅ TTL Index: ${hasTTLIndex}`);
 print(`   ✅ Array Index: ${hasArrayIndex}`);
 print(`   ✅ Partial Index: ${hasPartialIndex}`);
+const hashIndex = newsIndexes.find(idx => idx.key && idx.key.hash);
+if (hashIndex) {
+    print(`   🔍 Hash Index Details: ${hashIndex.unique ? 'UNIQUE' : 'non-unique'} ${hashIndex.sparse ? 'SPARSE' : ''}`);
+} else {
+    print(`   ❌ Hash Index: NOT FOUND (deduplication will not work)`);
+}
 // 3. ПРОВЕРКА БАЗОВЫХ ОПЕРАЦИЙ
 print('\n⚡ 3. BASIC OPERATIONS CHECK:');
 
@@ -164,7 +170,6 @@ try {
     print(`   ❌ Aggregations failed: ${e.message}`);
 }
 
-// 5. ПРОВЕРКА СПЕЦИАЛЬНЫХ ВОЗМОЖНОСТЕЙ
 print('\n🎯 5. SPECIAL FEATURES CHECK:');
 
 // Текстовый поиск
@@ -180,18 +185,80 @@ try {
     print(`   ❌ Text search: ${e.message}`);
 }
 
-// Дедупликация по hash
+// ПРАВИЛЬНАЯ ПРОВЕРКА ДЕДУПЛИКАЦИИ
 try {
-    const hashDuplicates = db.news.aggregate([
-        { $group: { _id: "$hash", count: { $sum: 1 } } },
-        { $match: { count: { $gt: 1 } } }
-    ]).toArray();
-    validationResults.deduplication = hashDuplicates.length === 0;
-    print(`   ✅ Deduplication by hash: ${hashDuplicates.length === 0 ? 'No duplicates' : `${hashDuplicates.length} duplicates found`}`);
+    // 1. Сначала проверяем, что существует уникальный индекс на поле hash
+    const hashIndex = newsIndexes.find(idx => 
+        idx.key && idx.key.hash && idx.unique
+    );
+    
+    if (!hashIndex) {
+        validationResults.deduplication = false;
+        print('   ❌ Deduplication: No unique index on hash field');
+    } else {
+        print('   ✅ Unique index on hash field: Found');
+        
+        // 2. Проверяем, что нет существующих дубликатов
+        const existingDuplicates = db.news.aggregate([
+            { $group: { _id: "$hash", count: { $sum: 1 } } },
+            { $match: { count: { $gt: 1 } } },
+            { $limit: 1 }
+        ]).toArray();
+        
+        if (existingDuplicates.length > 0) {
+            validationResults.deduplication = false;
+            print(`   ❌ Deduplication: Found ${existingDuplicates.length} existing duplicate groups`);
+        } else {
+            print('   ✅ No existing duplicates found');
+            
+            // 3. Тестируем механизм дедупликации, пытаясь вставить дубликат
+            const testHash = "dedup_test_" + Date.now();
+            const testDoc1 = {
+                title: "Deduplication Test 1",
+                content: "Test content 1",
+                hash: testHash,
+                category: "technology",
+                author: { firstName: "Test", lastName: "User" },
+                metadata: { publishDate: new Date() }
+            };
+            
+            const testDoc2 = {
+                title: "Deduplication Test 2", 
+                content: "Test content 2",
+                hash: testHash, // Тот же hash!
+                category: "technology",
+                author: { firstName: "Test", lastName: "User" },
+                metadata: { publishDate: new Date() }
+            };
+            
+            // Вставляем первый документ
+            const firstInsert = db.news.insertOne(testDoc1);
+            print('   ✅ First document inserted successfully');
+            
+            // Пытаемся вставить второй документ с тем же hash
+            try {
+                db.news.insertOne(testDoc2);
+                validationResults.deduplication = false;
+                print('   ❌ Deduplication FAILED: Second document with same hash was inserted');
+            } catch (e) {
+                if (e.code === 11000) { // MongoDB duplicate key error
+                    validationResults.deduplication = true;
+                    print('   ✅ Deduplication WORKING: Second document correctly rejected (duplicate key error)');
+                } else {
+                    validationResults.deduplication = false;
+                    print(`   ❌ Deduplication: Unexpected error: ${e.message}`);
+                }
+            }
+            
+            // Убираем тестовые документы
+            db.news.deleteOne({ _id: firstInsert.insertedId });
+        }
+    }
 } catch (e) {
     validationResults.deduplication = false;
-    print(`   ❌ Deduplication check: ${e.message}`);
+    print(`   ❌ Deduplication check failed: ${e.message}`);
 }
+
 
 // 6. ПРОВЕРКА ВИТРИНЫ ДАННЫХ
 print('\n📊 6. DATA MART CHECK:');
