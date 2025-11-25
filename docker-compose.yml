@@ -90,20 +90,18 @@ services:
         # Запускаем PostgreSQL
         exec docker-entrypoint.sh postgres
       "
+
   mongodb:
     image: mongo:7.0
     container_name: bd-mongodb
     ports:
       - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password
-      MONGO_INITDB_DATABASE: news_aggregator
     volumes:
-      - mongodb_data:/data/db
-      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - bd_mongodb_data:/data/db
+    command: "--noauth"
     networks:
       - bd_default
+    restart: unless-stopped
 
   mongo-express:
     image: mongo-express
@@ -111,16 +109,18 @@ services:
     ports:
       - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
-      ME_CONFIG_MONGODB_ADMINPASSWORD: password
-      ME_CONFIG_MONGODB_URL: mongodb://admin:password@mongodb:27017/
+      ME_CONFIG_MONGODB_URL: "mongodb://mongodb:27017"
+      ME_CONFIG_BASICAUTH_USERNAME: "admin"
+      ME_CONFIG_BASICAUTH_PASSWORD: "admin"
     networks:
       - bd_default
     depends_on:
       - mongodb
+    restart: unless-stopped
+
 volumes:
   postgres_data:
-  mongodb_data:
+  bd_mongodb_data:
   postgres_replica_data:
 
 networks:
