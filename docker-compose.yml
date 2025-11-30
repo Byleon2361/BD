@@ -90,6 +90,22 @@ services:
         # Запускаем PostgreSQL
         exec docker-entrypoint.sh postgres
       "
+  postgres-exporter:
+   image: prometheuscommunity/postgres-exporter:latest
+   container_name: postgres-exporter
+   ports:
+    - "9187:9187"
+   environment:
+    - DATA_SOURCE_NAME=postgresql://postgres:password@postgres:5432/news_aggregator?sslmode=disable
+   volumes:
+    - ./queries.yaml:/etc/postgres-exporter/queries.yaml:ro  # ДОБАВЬ ЭТУ СТРОКУ
+   command:
+    - '--extend.query-path=/etc/postgres-exporter/queries.yaml'
+   networks:
+    - bd_default
+   depends_on:
+    - postgres
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -109,6 +125,24 @@ services:
       - bd_default
     depends_on:
       - postgres-exporter
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - bd_default
+    restart: unless-stopped
   # Grafana для визуализации
   grafana:
     image: grafana/grafana:latest
@@ -128,17 +162,6 @@ services:
       - prometheus
 
   # Экспортер метрик PostgreSQL
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    container_name: postgres-exporter
-    ports:
-      - "9187:9187"
-    environment:
-      - DATA_SOURCE_NAME=postgresql://postgres:password@postgres:5432/news_aggregator?sslmode=disable
-    networks:
-      - bd_default
-    depends_on:
-      - postgres
 volumes:
   postgres_data:
   postgres_replica_data:
