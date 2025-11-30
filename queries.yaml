@@ -1,0 +1,33 @@
+pg_stat_statements:
+  query: |
+    SELECT
+      queryid::text as query_id,
+      LEFT(query, 50) as query_text,
+      calls as total_calls,
+      total_exec_time as total_time_ms,
+      mean_exec_time as mean_time_ms,
+      rows as total_rows
+    FROM pg_stat_statements
+    WHERE calls > 0
+    AND dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+    ORDER BY total_exec_time DESC
+    LIMIT 20
+  metrics:
+    - query_id:
+        usage: "LABEL"
+        description: "Query ID"
+    - query_text:
+        usage: "LABEL"
+        description: "Query text"
+    - total_calls:
+        usage: "GAUGE"
+        description: "Total calls"
+    - total_time_ms:
+        usage: "GAUGE"
+        description: "Total time (ms)"
+    - mean_time_ms:
+        usage: "GAUGE"
+        description: "Mean time (ms)"
+    - total_rows:
+        usage: "GAUGE"
+        description: "Total rows"

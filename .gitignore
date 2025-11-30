@@ -3,3 +3,4 @@ news_data_3m.sql
 complete_news_database_postgres.sql
 REPORT.md
 ./backups/*.sql
+*.code-workspace
