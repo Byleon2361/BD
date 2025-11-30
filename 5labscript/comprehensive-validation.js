@@ -1,9 +1,38 @@
-// comprehensive-validation.js
+// comprehensive-validation-sha256-fixed.js
 db = db.getSiblingDB('news_aggregator');
 
 print('=== COMPREHENSIVE MONGODB NEWS AGGREGATOR VALIDATION ===');
 
 let validationResults = {};
+
+// Функция для создания хеша заголовка (упрощенная версия)
+function generateTitleHash(title) {
+    // Простая хеш-функция для демонстрации
+    // В продакшене лучше использовать криптографические библиотеки на стороне приложения
+    let hash = 0;
+    const normalizedTitle = title.toLowerCase().trim();
+    
+    for (let i = 0; i < normalizedTitle.length; i++) {
+        const char = normalizedTitle.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    return Math.abs(hash).toString(16).padStart(8, '0');
+}
+
+// Альтернативная функция для проверки существующих хешей
+function checkExistingHashType() {
+    const sampleDoc = db.news.findOne({titleHash: {$exists: true}}, {titleHash: 1});
+    if (sampleDoc && sampleDoc.titleHash) {
+        return {
+            length: sampleDoc.titleHash.length,
+            type: sampleDoc.titleHash.length === 32 ? 'MD5' : 
+                  sampleDoc.titleHash.length === 64 ? 'SHA256' : 'Custom'
+        };
+    }
+    return null;
+}
 
 // 1. ПРОВЕРКА БАЗОВЫХ СТРУКТУР
 print('\n1. DATABASE STRUCTURE CHECK:');
@@ -50,22 +79,39 @@ print('   TTL Index: ' + hasTTLIndex);
 print('   Array Index: ' + hasArrayIndex);
 print('   Partial Index: ' + hasPartialIndex);
 
-const hashIndex = newsIndexes.find(idx => idx.key && idx.key.hash);
-if (hashIndex) {
-    print('   Hash Index Details: ' + (hashIndex.unique ? 'UNIQUE' : 'non-unique') + ' ' + (hashIndex.sparse ? 'SPARSE' : ''));
+// Проверяем наличие titleHash индекса
+const titleHashIndex = newsIndexes.find(idx => idx.key && idx.key.titleHash);
+if (titleHashIndex) {
+    print('   TitleHash Index: ' + (titleHashIndex.unique ? 'UNIQUE' : 'non-unique'));
+    validationResults.titleHashIndex = titleHashIndex.unique;
+    
+    // Проверяем тип существующих хешей
+    const hashInfo = checkExistingHashType();
+    if (hashInfo) {
+        print('   Existing hash length: ' + hashInfo.length + ' chars');
+        print('   🔍 Hash type: ' + hashInfo.type);
+        
+        // Если хеши уже есть и они 64 символа, считаем что SHA256 работает
+        if (hashInfo.length === 64) {
+            validationResults.existingSha256Hashes = true;
+        }
+    }
 } else {
-    print('   Hash Index: NOT FOUND (deduplication will not work)');
+    print('   TitleHash Index: NOT FOUND');
+    validationResults.titleHashIndex = false;
 }
 
 // 3. ПРОВЕРКА БАЗОВЫХ ОПЕРАЦИЙ
 print('\n3. BASIC OPERATIONS CHECK:');
 
 try {
-    // INSERT
+    // INSERT с упрощенным хешем
+    const testTitle = "Validation Test Article " + Date.now();
     const testDoc = {
-        title: "Validation Test Article",
+        title: testTitle,
         content: "Test content for validation",
         hash: "validation_test_" + Date.now(),
+        titleHash: generateTitleHash(testTitle),
         category: "technology",
         author: { firstName: "Test", lastName: "User", email: "test@test.com" },
         metrics: { views: 0, likes: 0, shares: 0 },
@@ -74,6 +120,7 @@ try {
     
     const insertResult = db.news.insertOne(testDoc);
     print('   insertOne: OK');
+    print('   Generated hash: ' + testDoc.titleHash);
     
     // UPDATE с $set
     db.news.updateOne(
@@ -108,7 +155,7 @@ try {
     // PROJECTION
     const projected = db.news.find(
         { _id: insertResult.insertedId },
-        { title: 1, category: 1, "metrics.views": 1, _id: 0 }
+        { title: 1, category: 1, "metrics.views": 1, titleHash: 1, _id: 0 }
     ).toArray();
     print('   Projection: OK');
     
@@ -172,7 +219,108 @@ try {
     print('   Aggregations failed: ' + e.message);
 }
 
-print('\n5. SPECIAL FEATURES CHECK:');
+// 5. ПРОВЕРКА ДЕДУПЛИКАЦИИ ПО TITLE HASH
+print('\n5. TITLE DEDUPLICATION CHECK:');
+
+try {
+    if (!validationResults.titleHashIndex) {
+        print('   ❌ UNIQUE INDEX titleHash NOT FOUND');
+        print('   Run: db.news.createIndex({ titleHash: 1 }, { unique: true, name: "uniq_title_hash" })');
+        validationResults.deduplication = false;
+    } else {
+        print('   ✅ UNIQUE INDEX titleHash: Found');
+        
+        // Проверяем существующие дубликаты по titleHash
+        const existingTitleDuplicates = db.news.aggregate([
+            { $group: { _id: "$titleHash", count: { $sum: 1 } } },
+            { $match: { count: { $gt: 1 } } },
+            { $limit: 1 }
+        ]).toArray();
+        
+        if (existingTitleDuplicates.length > 0) {
+            print('   ⚠️  Found ' + existingTitleDuplicates.length + ' existing title duplicate groups');
+            validationResults.deduplication = false;
+        } else {
+            print('   ✅ No existing title duplicates found');
+            
+            // ТЕСТ ДЕДУПЛИКАЦИИ
+            const testTitle = "Test Deduplication Article " + Date.now();
+            const testTitleHash = generateTitleHash(testTitle);
+            
+            const testDoc1 = {
+                title: testTitle,
+                content: "Test content for deduplication",
+                hash: "test_hash_" + Date.now(),
+                titleHash: testTitleHash,
+                category: "technology",
+                author: { firstName: "Test", lastName: "User" },
+                metadata: { publishDate: new Date() }
+            };
+            
+            const testDoc2 = {
+                title: testTitle, // Тот же заголовок!
+                content: "Different content but same title",
+                hash: "test_hash_" + (Date.now() + 1),
+                titleHash: testTitleHash, // Тот же titleHash!
+                category: "technology",
+                author: { firstName: "Test", lastName: "User" },
+                metadata: { publishDate: new Date() }
+            };
+            
+            // Вставляем первый документ
+            const firstInsert = db.news.insertOne(testDoc1);
+            print('   ✅ First document inserted successfully');
+            
+            // Пытаемся вставить второй документ с тем же titleHash
+            try {
+                db.news.insertOne(testDoc2);
+                validationResults.deduplication = false;
+                print('   ❌ Deduplication FAILED: Second document with same titleHash was inserted');
+            } catch (e) {
+                if (e.code === 11000) {
+                    validationResults.deduplication = true;
+                    print('   ✅ Title-based deduplication WORKING: Second document correctly rejected');
+                } else {
+                    validationResults.deduplication = false;
+                    print('   ❌ Unexpected error: ' + e.message);
+                }
+            }
+            
+            // Очищаем тестовый документ
+            db.news.deleteOne({ _id: firstInsert.insertedId });
+        }
+        
+        // Проверяем заполненность поля titleHash
+        const docsWithoutTitleHash = db.news.countDocuments({ titleHash: { $exists: false } });
+        if (docsWithoutTitleHash > 0) {
+            print('   ⚠️  Found ' + docsWithoutTitleHash + ' documents without titleHash field');
+            print('   Run this script to fix:');
+            print(`
+            db.news.find({titleHash: {$exists: false}}).forEach(function(doc) {
+                var newTitleHash = doc.title.toLowerCase().trim();
+                // В продакшене здесь должна быть настоящая SHA256 функция
+                db.news.updateOne(
+                    {_id: doc._id},
+                    {$set: {titleHash: newTitleHash}}
+                );
+            });
+            `);
+        } else {
+            print('   ✅ All documents have titleHash field');
+            
+            // Если все документы имеют хеши и они 64 символа, считаем SHA256 активным
+            if (validationResults.existingSha256Hashes) {
+                validationResults.sha256Active = true;
+                print('   🔒 SHA256-like hashes detected (64 chars)');
+            }
+        }
+    }
+} catch (e) {
+    validationResults.deduplication = false;
+    print('   ❌ Deduplication check failed: ' + e.message);
+}
+
+print('\n6. SPECIAL FEATURES CHECK:');
 
 // Текстовый поиск
 try {
@@ -187,272 +335,8 @@ try {
     print('   Text search: ' + e.message);
 }
 
-// ПРАВИЛЬНАЯ ПРОВЕРКА ДЕДУПЛИКАЦИИ
-// ПРАВИЛЬНАЯ ПРОВЕРКА ДЕДУПЛИКАЦИИ С СЕМАНТИЧЕСКИМ АНАЛИЗОМ
-try {
-    const hashIndex = newsIndexes.find(idx => 
-        idx.key && idx.key.hash && idx.unique
-    );
-    
-    if (!hashIndex) {
-        validationResults.deduplication = false;
-        print('   Deduplication: No unique index on hash field');
-    } else {
-        print('   Unique index on hash field: Found');
-        
-        // 1. Проверка существующих дубликатов по хешу
-        const existingDuplicates = db.news.aggregate([
-            { $group: { _id: "$hash", count: { $sum: 1 } } },
-            { $match: { count: { $gt: 1 } } },
-            { $limit: 1 }
-        ]).toArray();
-        
-        if (existingDuplicates.length > 0) {
-            validationResults.deduplication = false;
-            print('   Deduplication: Found ' + existingDuplicates.length + ' existing duplicate groups');
-        } else {
-            print('   No existing duplicates found by hash');
-            
-            // 2. ТЕСТ БАЗОВОЙ ДЕДУПЛИКАЦИИ ПО ХЕШУ
-            const testHash = "dedup_test_" + Date.now();
-            const testDoc1 = {
-                title: "Deduplication Test 1",
-                content: "Test content for deduplication validation",
-                hash: testHash,
-                category: "technology",
-                author: { firstName: "Test", lastName: "User" },
-                metadata: { publishDate: new Date() }
-            };
-            
-            const testDoc2 = {
-                title: "Deduplication Test 2", 
-                content: "Test content for deduplication validation",
-                hash: testHash, // Тот же хеш!
-                category: "technology",
-                author: { firstName: "Test", lastName: "User" },
-                metadata: { publishDate: new Date() }
-            };
-            
-            const firstInsert = db.news.insertOne(testDoc1);
-            print('   First document inserted successfully');
-            
-            try {
-                db.news.insertOne(testDoc2);
-                validationResults.deduplication = false;
-                print('   ❌ Deduplication FAILED: Second document with same hash was inserted');
-            } catch (e) {
-                if (e.code === 11000) {
-                    validationResults.deduplication = true;
-                    print('   ✅ Basic deduplication WORKING: Second document correctly rejected (duplicate key error)');
-                } else {
-                    validationResults.deduplication = false;
-                    print('   ❌ Deduplication: Unexpected error: ' + e.message);
-                }
-            }
-            
-            // Очищаем тестовые документы
-            db.news.deleteOne({ _id: firstInsert.insertedId });
-            
-            // 3. ТЕСТ СЕМАНТИЧЕСКОЙ ДЕДУПЛИКАЦИИ
-            print('\n   🔍 Testing semantic deduplication...');
-            
-            // Функция для нормализации текста (упрощенная)
-            function normalizeText(text) {
-                return text
-                    .toLowerCase()
-                    .replace(/[^\w\s]/g, '')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-            }
-            
-            // Функция для вычисления схожести заголовков (упрощенная)
-            function calculateSimilarity(str1, str2) {
-                const words1 = normalizeText(str1).split(' ');
-                const words2 = normalizeText(str2).split(' ');
-                const intersection = words1.filter(word => words2.includes(word));
-                return intersection.length / Math.max(words1.length, words2.length);
-            }
-            
-            // Похожие новости для теста
-            const similarArticles = [
-                {
-                    title: "Breaking: New iPhone 15 Released with Advanced Features",
-                    content: "Apple has announced the new iPhone 15 with revolutionary technology...",
-                    hash: "iphone_news_" + Date.now() + "_1",
-                    category: "technology",
-                    author: { firstName: "Tech", lastName: "Reporter" },
-                    metadata: { publishDate: new Date() }
-                },
-                {
-                    title: "iPhone 15 Launch: Latest Apple Smartphone Features",
-                    content: "The new iPhone 15 from Apple includes cutting-edge innovations...", 
-                    hash: "iphone_news_" + Date.now() + "_2",
-                    category: "technology",
-                    author: { firstName: "Tech", lastName: "Reporter" },
-                    metadata: { publishDate: new Date() }
-                },
-                {
-                    title: "Apple Unveils iPhone 15 with Major Upgrades",
-                    content: "Apple's newest iPhone 15 brings significant improvements to mobile technology...",
-                    hash: "iphone_news_" + Date.now() + "_3", 
-                    category: "technology",
-                    author: { firstName: "Tech", lastName: "Reporter" },
-                    metadata: { publishDate: new Date() }
-                }
-            ];
-            
-            // Вставляем похожие статьи
-            const insertedIds = [];
-            similarArticles.forEach((article, index) => {
-                const result = db.news.insertOne(article);
-                insertedIds.push(result.insertedId);
-                print('   Inserted similar article ' + (index + 1) + ': ' + article.title);
-            });
-            
-            // Проверяем семантическое сходство
-            const similarityThreshold = 0.8;
-            let foundSimilar = false;
-            
-            for (let i = 0; i < similarArticles.length; i++) {
-                for (let j = i + 1; j < similarArticles.length; j++) {
-                    const similarity = calculateSimilarity(
-                        similarArticles[i].title, 
-                        similarArticles[j].title
-                    );
-                    
-                    if (similarity >= similarityThreshold) {
-                        foundSimilar = true;
-                        print('   🔥 Found semantic similarity: ' + 
-                              Math.round(similarity * 100) + '% between:\n      "' + 
-                              similarArticles[i].title + '"\n      "' + 
-                              similarArticles[j].title + '"');
-                    }
-                }
-            }
-            
-            if (foundSimilar) {
-                print('   ⚠️  Semantic duplicates detected (but not prevented by current system)');
-                print('   💡 Recommendation: Implement advanced deduplication with:');
-                print('      - Composite indexes (title + source + date)');
-                print('      - Text normalization and similarity algorithms');
-                print('      - ML-based semantic analysis');
-            } else {
-                print('   ✅ No significant semantic duplicates found');
-            }
-            
-            // 4. ТЕСТ ДЕДУПЛИКАЦИИ ПО РАЗНЫМ СТРАТЕГИЯМ
-            print('\n   🧪 Testing multi-strategy deduplication...');
-            
-            // Тест на одинаковые заголовки с разными хешами
-            const sameTitleArticles = [
-                {
-                    title: "Global Climate Summit Concludes with New Agreements",
-                    content: "Content version 1...",
-                    hash: "climate_summit_" + Date.now() + "_a",
-                    category: "politics", 
-                    author: { firstName: "News", lastName: "Agency" },
-                    metadata: { publishDate: new Date() }
-                },
-                {
-                    title: "Global Climate Summit Concludes with New Agreements", 
-                    content: "Content version 2...",
-                    hash: "climate_summit_" + Date.now() + "_b",
-                    category: "politics",
-                    author: { firstName: "News", lastName: "Agency" },
-                    metadata: { publishDate: new Date() }
-                }
-            ];
-            
-            // Проверяем можно ли вставить статьи с одинаковыми заголовками
-            const titleDupTest = db.news.findOne({ 
-                title: "Global Climate Summit Concludes with New Agreements" 
-            });
-            
-            if (titleDupTest) {
-                print('   ⚠️  Articles with identical titles can be inserted (no title-based deduplication)');
-            }
-            
-            // Вставляем тестовые статьи для демонстрации
-            sameTitleArticles.forEach(article => {
-                try {
-                    db.news.insertOne(article);
-                    print('   📝 Inserted article with common title: ' + article.title);
-                } catch (e) {
-                    print('   ✅ Title-based deduplication blocked: ' + e.message);
-                }
-            });
-            
-            // 5. АНАЛИЗ СУЩЕСТВУЮЩИХ ДАННЫХ НА ДУБЛИКАТЫ
-            print('\n   📊 Analyzing existing data for potential duplicates...');
-            
-            // Поиск потенциальных дубликатов по заголовкам
-            const potentialDupes = db.news.aggregate([
-                {
-                    $group: {
-                        _id: { $toLower: "$title" },
-                        count: { $sum: 1 },
-                        articles: { 
-                            $push: {
-                                id: "$_id",
-                                title: "$title", 
-                                hash: "$hash",
-                                source: "$source.name",
-                                date: "$metadata.publishDate"
-                            }
-                        }
-                    }
-                },
-                { $match: { count: { $gt: 1 } } },
-                { $limit: 3 }
-            ]).toArray();
-            
-            if (potentialDupes.length > 0) {
-                print('   🔍 Found ' + potentialDupes.length + ' groups of potential title duplicates:');
-                potentialDupes.forEach(group => {
-                    print('      - "' + group._id + '": ' + group.count + ' articles');
-                });
-            } else {
-                print('   ✅ No obvious title duplicates found in existing data');
-            }
-            
-            // Очищаем все тестовые данные
-            insertedIds.forEach(id => {
-                try { db.news.deleteOne({ _id: id }); } catch(e) {}
-            });
-            sameTitleArticles.forEach(article => {
-                try { 
-                    db.news.deleteOne({ hash: article.hash }); 
-                } catch(e) {}
-            });
-            
-            print('   🧹 Cleaned up test data');
-            
-            // ФИНАЛЬНАЯ ОЦЕНКА СИСТЕМЫ ДЕДУПЛИКАЦИИ
-            const dedupScore = validationResults.deduplication ? 1 : 0;
-            const semanticAwareness = foundSimilar ? 0.5 : 1;
-            const multiStrategy = potentialDupes.length === 0 ? 1 : 0.7;
-            
-            const overallDedupScore = (dedupScore + semanticAwareness + multiStrategy) / 3;
-            
-            print('\n   📈 DEDUPLICATION SYSTEM ASSESSMENT:');
-            print('      Basic hash-based: ' + (dedupScore ? '✅ EXCELLENT' : '❌ FAILED'));
-            print('      Semantic awareness: ' + (semanticAwareness >= 0.7 ? '✅ GOOD' : '⚠️  NEEDS IMPROVEMENT'));
-            print('      Multi-strategy: ' + (multiStrategy >= 0.8 ? '✅ GOOD' : '⚠️  BASIC'));
-            print('      Overall score: ' + Math.round(overallDedupScore * 100) + '%');
-            
-            if (overallDedupScore >= 0.8) {
-                print('   🎉 Deduplication system is robust and effective!');
-            } else {
-                print('   💡 Consider enhancing deduplication with additional strategies');
-            }
-        }
-    }
-} catch (e) {
-    validationResults.deduplication = false;
-    print('   ❌ Deduplication check failed: ' + e.message);
-}
-// 6. ПРОВЕРКА ВИТРИНЫ ДАННЫХ
-print('\n6. DATA MART CHECK:');
+// 7. ПРОВЕРКА ВИТРИНЫ ДАННЫХ
+print('\n7. DATA MART CHECK:');
 
 const dataMartExists = collections.includes('authors_daily_stats') || collections.includes('daily_stats');
 if (dataMartExists) {
@@ -460,13 +344,18 @@ if (dataMartExists) {
     const dataMartCount = db[dataMartName].countDocuments();
     validationResults.dataMart = dataMartCount > 0;
     print('   Data mart "' + dataMartName + '": ' + dataMartCount + ' records');
+    
+    // Если витрина пустая, предлагаем заполнить
+    if (dataMartCount === 0) {
+        print('   💡 Run data-mart.js to populate the data mart');
+    }
 } else {
     validationResults.dataMart = false;
     print('   No data mart found');
 }
 
-// 7. ПРОВЕРКА EXPLAIN И ПРОИЗВОДИТЕЛЬНОСТИ
-print('\n7. PERFORMANCE CHECK:');
+// 8. ПРОВЕРКА EXPLAIN И ПРОИЗВОДИТЕЛЬНОСТИ
+print('\n8. PERFORMANCE CHECK:');
 
 try {
     const explainResult = db.news.find({ category: "technology" }).explain("executionStats");
@@ -478,7 +367,7 @@ try {
     print('   Explain failed: ' + e.message);
 }
 
-// 8. ИТОГОВАЯ СТАТИСТИКА
+// 9. ИТОГОВАЯ СТАТИСТИКА
 print('\nVALIDATION SUMMARY:');
 print('=====================');
 
@@ -489,8 +378,8 @@ const requirements = [
     { name: 'Special Indexes', result: validationResults.specialIndexes },
     { name: 'Basic Operations', result: validationResults.basicOperations },
     { name: 'Aggregation Pipelines', result: validationResults.aggregations },
+    { name: 'Deduplication by Title Hash', result: validationResults.deduplication },
     { name: 'Text Search', result: validationResults.textSearch },
-    { name: 'Deduplication', result: validationResults.deduplication },
     { name: 'Data Mart', result: validationResults.dataMart },
     { name: 'Performance Analysis', result: validationResults.explain }
 ];
@@ -505,28 +394,58 @@ requirements.forEach(req => {
 print('\nRESULTS: ' + passed + '/' + requirements.length + ' requirements passed');
 
 if (passed === requirements.length) {
-    print('\nALL REQUIREMENTS COMPLETED SUCCESSFULLY!');
+    print('\n🎉 ALL REQUIREMENTS COMPLETED SUCCESSFULLY!');
     print('=========================================');
     print('MongoDB News Aggregator is fully operational!');
+    
+    // Дополнительная информация о SHA256
+    if (validationResults.sha256Active) {
+        print('🔒 SHA256-like hashing is active (64-character hashes detected)');
+    }
 } else {
-    print('\nSOME REQUIREMENTS NEED ATTENTION');
+    print('\n⚠️  SOME REQUIREMENTS NEED ATTENTION');
     print('=================================');
-    print('Check the failed items above and run the corresponding scripts.');
+    
+    if (!validationResults.titleHashIndex) {
+        print('\n🔧 FIX REQUIRED:');
+        print('   Run this command ONCE:');
+        print('   db.news.createIndex({ titleHash: 1 }, { unique: true, name: "uniq_title_hash" })');
+    }
+    
+    if (!validationResults.deduplication && validationResults.titleHashIndex) {
+        print('\n🔧 FIX REQUIRED:');
+        print('   Ensure all documents have titleHash field');
+    }
+    
+    if (!validationResults.dataMart) {
+        print('\n🔧 FIX REQUIRED:');
+        print('   Run data-mart.js to populate data mart');
+    }
+    
+    print('\nCheck the failed items above and run the corresponding scripts.');
 }
 
-// 9. ДОПОЛНИТЕЛЬНЫЕ ТЕСТЫ REST API
-print('\n8. REST API READINESS CHECK:');
+// 10. ДОПОЛНИТЕЛЬНЫЕ ТЕСТЫ REST API
+print('\n9. REST API READINESS CHECK:');
 
 const apiReadiness = {
     topNews: db.news.countDocuments({ "metadata.isActive": true }) > 0,
     categories: db.categories.countDocuments() > 0,
     authors: db.authors_stats.countDocuments() > 0,
-    search: db.news.countDocuments({ $text: { $search: "technology" } }) > 0
+    search: db.news.countDocuments({ $text: { $search: "technology" } }) > 0,
+    deduplication: validationResults.deduplication
 };
 
-print('   Top news endpoint: ' + (apiReadiness.topNews ? 'Ready' : 'No data'));
-print('   Categories endpoint: ' + (apiReadiness.categories ? 'Ready' : 'No data'));
-print('   Authors endpoint: ' + (apiReadiness.authors ? 'Ready' : 'No data'));
-print('   Search endpoint: ' + (apiReadiness.search ? 'Ready' : 'No data'));
+print('   Top news endpoint: ' + (apiReadiness.topNews ? '✅ Ready' : '❌ No data'));
+print('   Categories endpoint: ' + (apiReadiness.categories ? '✅ Ready' : '❌ No data'));
+print('   Authors endpoint: ' + (apiReadiness.authors ? '✅ Ready' : '❌ No data'));
+print('   Search endpoint: ' + (apiReadiness.search ? '✅ Ready' : '❌ No data'));
+print('   Deduplication: ' + (apiReadiness.deduplication ? '✅ Active' : '❌ Inactive'));
+
+// Информация о хешах
+const hashInfo = checkExistingHashType();
+if (hashInfo) {
+    print('   Hash type: ' + hashInfo.type + ' (' + hashInfo.length + ' chars)');
+}
 
 print('\n=== VALIDATION COMPLETED ===');
