@@ -20,6 +20,13 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
+  # Добавляем мониторинг MongoDB API
+  - job_name: 'mongodb-api'
+    static_configs:
+      - targets: ['mongodb-api:3000']
+    metrics_path: /api/health
+    scrape_interval: 30s
+
 alerting:
   alertmanagers:
     - static_configs:

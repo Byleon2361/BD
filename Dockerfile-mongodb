@@ -1,0 +1,22 @@
+# Dockerfile-mongodb
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Устанавливаем MongoDB shell (mongosh)
+RUN apk add --no-cache mongodb-tools
+
+# Копируем package.json
+COPY package.json ./
+
+# Устанавливаем зависимости
+RUN npm install
+
+# Копируем исходный код
+COPY . .
+
+# Открываем порт
+EXPOSE 3000
+
+# Команда по умолчанию
+CMD ["node", "app.js"]

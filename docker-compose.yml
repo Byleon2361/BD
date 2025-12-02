@@ -90,21 +90,22 @@ services:
         # Запускаем PostgreSQL
         exec docker-entrypoint.sh postgres
       "
+  
   postgres-exporter:
-   image: prometheuscommunity/postgres-exporter:latest
-   container_name: postgres-exporter
-   ports:
-    - "9187:9187"
-   environment:
-    - DATA_SOURCE_NAME=postgresql://postgres:password@postgres:5432/news_aggregator?sslmode=disable
-   volumes:
-    - ./queries.yaml:/etc/postgres-exporter/queries.yaml:ro  # ДОБАВЬ ЭТУ СТРОКУ
-   command:
-    - '--extend.query-path=/etc/postgres-exporter/queries.yaml'
-   networks:
-    - bd_default
-   depends_on:
-    - postgres
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    ports:
+      - "9187:9187"
+    environment:
+      - DATA_SOURCE_NAME=postgresql://postgres:password@postgres:5432/news_aggregator?sslmode=disable
+    volumes:
+      - ./queries.yaml:/etc/postgres-exporter/queries.yaml:ro
+    command:
+      - '--extend.query-path=/etc/postgres-exporter/queries.yaml'
+    networks:
+      - bd_default
+    depends_on:
+      - postgres
 
   prometheus:
     image: prom/prometheus:latest
@@ -143,7 +144,7 @@ services:
     networks:
       - bd_default
     restart: unless-stopped
-  # Grafana для визуализации
+  
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -161,18 +162,78 @@ services:
     depends_on:
       - prometheus
 
-  # Экспортер метрик PostgreSQL
+  # MongoDB сервисы
   mongodb:
     image: mongo:7.0
     container_name: bd-mongodb
     ports:
       - "27017:27017"
     volumes:
-      - bd_mongodb_data:/data/db
-    command: "--noauth"
+      - mongodb_data:/data/db
+      - ./5labscript/mongo-init.js:/docker-entrypoint-initdb.d/01-mongo-init.js:ro
+      - ./5labscript/mongo-seed.js:/docker-entrypoint-initdb.d/02-mongo-seed.js:ro
+    command: >
+      mongod
+      --bind_ip_all
+      --replSet rs0
     networks:
       - bd_default
     restart: unless-stopped
+
+  mongodb-init:
+    image: mongo:7.0
+    container_name: mongodb-init
+    depends_on:
+      mongodb:
+        condition: service_started
+    networks:
+      - bd_default
+    restart: on-failure:3
+    entrypoint: >
+      bash -c "
+        echo 'Waiting for MongoDB to be ready...'
+        until mongosh --host mongodb --eval 'db.adminCommand(\"ping\")' > /dev/null 2>&1; do
+          sleep 2
+          echo 'Waiting for MongoDB...'
+        done
+        
+        echo 'Initializing MongoDB Replica Set...'
+        
+        # Инициализируем replica set (для транзакций)
+        mongosh --host mongodb --eval '
+          try {
+            rs.status();
+            print(\"Replica set already initialized\");
+          } catch (e) {
+            print(\"Initializing replica set...\");
+            rs.initiate({
+              _id: \"rs0\",
+              members: [{ _id: 0, host: \"mongodb:27017\" }]
+            });
+          }
+        '
+        
+        # Ждем инициализации replica set
+        echo 'Waiting for replica set to be ready...'
+        sleep 10
+        
+        # Создаем пользователя и базу данных
+        echo 'Creating database and user...'
+        mongosh --host mongodb --eval '
+          use news_aggregator;
+          db.createUser({
+            user: \"news_user\",
+            pwd: \"news_password123\",
+            roles: [
+              { role: \"readWrite\", db: \"news_aggregator\" },
+              { role: \"dbAdmin\", db: \"news_aggregator\" }
+            ]
+          });
+          print(\"User created successfully\");
+        '
+        
+        echo 'MongoDB initialization complete!'
+      "
 
   mongo-express:
     image: mongo-express
@@ -180,19 +241,95 @@ services:
     ports:
       - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: "mongodb://mongodb:27017"
+      ME_CONFIG_MONGODB_URL: "mongodb://news_user:news_password123@mongodb:27017/news_aggregator?authSource=news_aggregator"
       ME_CONFIG_BASICAUTH_USERNAME: "admin"
       ME_CONFIG_BASICAUTH_PASSWORD: "admin"
     networks:
       - bd_default
     depends_on:
-      - mongodb
+      - mongodb-init
     restart: unless-stopped
+
+  # Node.js сервис для MongoDB API
+  mongodb-api:
+    build:
+      context: .
+      dockerfile: Dockerfile-mongodb
+    container_name: mongodb-api
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb://news_user:news_password123@mongodb:27017/news_aggregator?authSource=news_aggregator
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - ./5labscript:/app/5labscript
+      - ./package.json:/app/package.json
+      - ./app.js:/app/app.js
+    networks:
+      - bd_default
+    depends_on:
+      mongodb-init:
+        condition: service_completed_successfully
+    command: >
+      bash -c "
+        echo 'Waiting for MongoDB to be ready...'
+        until mongosh --host mongodb --eval 'db.adminCommand(\"ping\")' > /dev/null 2>&1; do
+          sleep 2
+          echo 'Waiting for MongoDB...'
+        done
+        
+        echo 'Installing dependencies...'
+        npm install
+        
+        echo 'Starting MongoDB API server...'
+        exec node app.js
+      "
+    restart: unless-stopped
+
+  # Сервис для запуска MongoDB тестов - УПРОЩЕННАЯ ВЕРСИЯ
+  mongodb-tests:
+    image: node:18-alpine
+    container_name: mongodb-tests
+    networks:
+      - bd_default
+    depends_on:
+      - mongodb-api
+    volumes:
+      - ./5labscript:/app/5labscript
+      - ./package.json:/app/package.json
+      - ./app.js:/app/app.js
+    working_dir: /app
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "
+      echo '=== WAITING FOR MONGODB API ===';
+      sleep 10;
+      echo '=== STARTING TESTS ===';
+      
+      echo '1. Checking API health...';
+      curl -f http://mongodb-api:3000/api/health || echo 'API not ready yet';
+      
+      echo '';
+      echo '2. Testing relationships...';
+      if [ -f /app/5labscript/mongodb-relationships.js ]; then
+        node /app/5labscript/mongodb-relationships.js || echo 'Relationships test failed';
+      fi
+      
+      echo '';
+      echo '3. Testing API endpoints...';
+      curl -s http://mongodb-api:3000/ | head -20;
+      
+      echo '';
+      echo '=== TESTS COMPLETE ===';
+      echo 'API should be available at: http://localhost:3000';
+      "
+    restart: "no"
 
 volumes:
   postgres_data:
-  bd_mongodb_data:
   postgres_replica_data:
+  mongodb_data:
   prometheus_data:
   grafana_data:
 
