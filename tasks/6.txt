@@ -1,0 +1,51 @@
+# Убиваем всё старое
+docker-compose down -v
+
+# Запускаем заново
+docker-compose up -d
+
+# Ждём 40 секунд
+sleep 40
+
+# Инициализируем все реплики
+docker exec -it bd-mongo-config-1 mongosh --eval "rs.initiate({_id:'configrs', configsvr:true, members:[{_id:0, host:'bd-mongo-config-1:27017'}]})"
+docker exec -it bd-mongo-shard1-1 mongosh --eval "rs.initiate({_id:'shard1rs', members:[{_id:0, host:'bd-mongo-shard1-1:27017'}]})"
+docker exec -it bd-mongo-shard2-1 mongosh --eval "rs.initiate({_id:'shard2rs', members:[{_id:0, host:'bd-mongo-shard2-1:27017'}]})"
+
+# Включаем шардинг
+docker exec -it bd-mongos-1 mongosh --eval "
+sh.addShard('shard1rs/bd-mongo-shard1-1:27017');
+sh.addShard('shard2rs/bd-mongo-shard2-1:27017');
+sh.enableSharding('news_aggregator');
+sh.shardCollection('news_aggregator.news', { category: 'hashed' });
+print('ШАРДИНГ + ТРАНЗАКЦИИ + CHANGE STREAMS — ВСЁ РАБОТАЕТ!');
+"
+ocker exec -it bd-mongo-config-1 mongosh --eval "rs.initiate({
+  _id: 'configrs',
+  configsvr: true,
+  members: [{ _id: 0, host: 'bd-mongo-config-1:27017' }]
+})"
+{ ok: 1 }
+polina@Polina:/mnt/c/Users/polin/OneDrive/Desktop/work/BD$ docker exec -it bd-mongo-shard1-1 mongosh --eval "rs.initiate({
+  _id: 'shard1rs',
+  members: [{ _id: 0, host: 'bd-mongo-shard1-1:27017' }]
+})"
+{ ok: 1 }
+polina@Polina:/mnt/c/Users/polin/OneDrive/Desktop/work/BD$ docker exec -it bd-mongo-shard2-1 mongosh --eval "rs.initiate({
+  _id: 'shard2rs',
+  members: [{ _id: 0, host: 'bd-mongo-shard2-1:27017' }]
+})"
+{ ok: 1 }
+docker exec -it bd-mongos-1 mongosh --eval "
+sh.addShard('shard1rs/bd-mongo-shard1-1:27017');
+sh.addShard('shard2rs/bd-mongo-shard2-1:27017');
+sh.enableSharding('news_aggregator');
+sh.shardCollection('news_aggregator.news', { category: 'hashed' });
+print('ШАРДИНГ + ТРАНЗАКЦИИ + CHANGE STREAMS — 100% ГОТОВО!');
+"
+docker exec -it bd-mongos-1 mongosh --eval "
+sh.enableSharding('news_aggregator');
+sh.shardCollection('news_aggregator.authors_stats', { _id: 'hashed' });
+sh.shardCollection('news_aggregator.comments', { _id: 'hashed' });
+print('Все коллекции теперь известны кластеру — транзакции заработают!');
+"

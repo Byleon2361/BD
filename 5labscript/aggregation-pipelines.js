@@ -339,6 +339,34 @@ const pipeline5 = [
     }
 ];
 
+
 print("\n5. Comments Engagement Analysis:");
 const result5 = db.news.aggregate(pipeline5).toArray();
 printjson(result5.slice(0, 5));
+// PIPELINE 6: Multi-level report with $facet and $bucket
+const pipeline6 = [
+    { $match: { "metadata.publishDate": { $gte: new Date(new Date() - 7 * 24 * 60 * 60 * 1000) } } },  // За неделю
+    { $facet: {
+        bySource: [
+            { $group: { _id: "$source.name", count: { $sum: 1 }, totalViews: { $sum: "$metrics.views" } } },
+            { $sort: { totalViews: -1 } }
+        ],
+        byTheme: [
+            { $unwind: "$metadata.tags" },
+            { $group: { _id: "$metadata.tags", count: { $sum: 1 }, avgViews: { $avg: "$metrics.views" } } },
+            { $sort: { count: -1 } }
+        ],
+        viewsBuckets: [
+            { $bucket: {
+                groupBy: "$metrics.views",
+                boundaries: [0, 100, 1000, 10000, Infinity],
+                default: "Other",
+                output: { count: { $sum: 1 } }
+            } }
+        ]
+    } }
+];
+
+print("\n6. Weekly News Distribution Report (by sources, themes, views buckets):");
+const result6 = db.news.aggregate(pipeline6).toArray();
+printjson(result6);

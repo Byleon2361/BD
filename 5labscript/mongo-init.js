@@ -40,3 +40,29 @@ db.categories.createIndex({ "name": 1 }, { unique: true });
 
 print('✅ All indexes created successfully');
 print('🚀 MongoDB is ready for seed data');
+// SCHEMA VALIDATION
+print('\n=== SETTING UP SCHEMA VALIDATION ===');
+
+db.runCommand({
+    collMod: "news",
+    validator: {
+        $jsonSchema: {
+            bsonType: "object",
+            required: ["title", "category", "metrics"],
+            properties: {
+                title: { bsonType: "string", description: "must be a string" },
+                category: { enum: ["politics", "sports", "technology", "entertainment", "business", "health", "science"], description: "must be one of predefined categories" },
+                metrics: {
+                    bsonType: "object",
+                    properties: {
+                        views: { bsonType: "int", minimum: 0, description: "views must be non-negative integer" }
+                    }
+                },
+                "metadata.tags": { bsonType: "array", items: { bsonType: "string" }, description: "tags must be array of strings" }
+            }
+        }
+    },
+    validationLevel: "strict",
+    validationAction: "error"
+});
+print('✅ Schema validation set for news collection (3 rules: views >=0, tags array of strings, category enum)');

@@ -350,7 +350,20 @@ db.news.updateOne(
         }
     }
 );
+// BULK OPERATIONS
+print("\n=== BULK WRITE OPERATIONS (MIXED TYPES) ===");
 
+const bulkOps = [
+    { insertOne: { document: { title: "Bulk Insert 1", category: "technology", metrics: { views: 100 } } } },  // Insert
+    { insertOne: { document: { title: "Bulk Insert 2", category: "sports", metrics: { views: 200 } } } },      // Insert
+    { updateOne: { filter: { title: "Bulk Insert 1" }, update: { $inc: { "metrics.views": 50 } } } },         // Update
+    { deleteOne: { filter: { title: "Bulk Insert 2" } } },                                                     // Delete
+    { replaceOne: { filter: { title: "Bulk Insert 1" }, replacement: { title: "Replaced Bulk", category: "politics", metrics: { views: 300 } } } }  // Replace
+];
+
+const bulkResult = db.news.bulkWrite(bulkOps);
+printjson(bulkResult);
+print('✅ Bulk write completed: 2 inserts, 1 update, 1 delete, 1 replace');
 // updateMany с $inc для счетчиков
 db.news.updateMany(
     { category: "technology", "metadata.isActive": true },
@@ -564,13 +577,7 @@ db.news.aggregate([
     },
     { $sort: { total_comments: -1 } }
 ]);
-// mongo-operations-complete.js
 
-// ... (все предыдущие INSERT, UPDATE, DELETE операции остаются без изменений)
-
-// === СПЕЦИАЛЬНЫЕ ВОЗМОЖНОСТИ ДЛЯ АГРЕГАТОРА НОВОСТЕЙ ===
-
-print("=== SPECIAL FEATURES FOR NEWS AGGREGATOR ===");
 
 // 1. ТЕКСТОВЫЙ ИНДЕКС ДЛЯ ПОЛНОТЕКСТОВОГО ПОИСКА
 print("\n1. Creating text index for full-text search...");

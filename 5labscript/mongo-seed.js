@@ -217,7 +217,61 @@ const categoryDocs = Object.entries(categoryStats).map(([name, count]) => ({
 
 db.categories.insertMany(categoryDocs);
 print(`✅ Categories inserted: ${categoryDocs.length}`);
+print('\n=== РЕАЛИЗАЦИЯ СВЯЗЕЙ МЕЖДУ КОЛЛЕКЦИЯМИ (1:N и M:N) ===');
+print('Создаём 1:N связь: news → comments (массив commentIds в news)');
+let bulkOps = [];
+db.news.find({}, { title: 1 }).forEach(function(news) {
+    const commentIds = db.comments
+        .find({ articleTitle: news.title }, { _id: 1 })
+        .map(c => c._id);
 
+    if (commentIds.length > 0) {
+        bulkOps.push({
+            updateOne: {
+                filter: { _id: news._id },
+                update: { $set: { commentIds: commentIds } }
+            }
+        });
+    }
+
+    // Пакетная отправка каждые 500 документов
+    if (bulkOps.length >= 500) {
+        db.news.bulkWrite(bulkOps);
+        bulkOps = [];
+    }
+});
+if (bulkOps.length > 0) db.news.bulkWrite(bulkOps);
+print('1:N связь создана (поле commentIds в news)');
+print('Создаём M:N связь: authors ↔ news (поле newsIds в authors_stats)');
+db.authors_stats.find().forEach(function(author) {
+    // Ищем новости ТОЛЬКО по email — это 100% уникально
+    const newsIds = db.news
+        .find({ "author.email": author.authorEmail })
+        .map(function(doc) { return doc._id; });  // <-- ВАЖНО: НЕ toArray()!
+
+    if (newsIds.length > 0) {
+        db.authors_stats.updateOne(
+            { _id: author._id },
+            { $set: { newsIds: newsIds } }
+        );
+    }
+});
+print('M:N связь создана (поле newsIds в authors_stats)');
+
+// ОБОСНОВАНИЕ ВЫБОРА (можно скопировать в отчёт):
+print('\nОБОСНОВАНИЕ АРХИТЕКТУРНЫХ РЕШЕНИЙ:');
+print('1:N (news → comments):');
+print('   → Использованы ССЫЛКИ (manual references)');
+print('   → Причина: комментарии добавляются динамически, частые обновления');
+print('   → Встраивание привело бы к превышению 16 МБ лимита документа');
+print('');
+print('M:N (authors ↔ news):');
+print('   → Использовано ВСТРАИВАНИЕ (newsIds в authors_stats)');
+print('   → Причина: статистика автора читается целиком при аналитике');
+print('   → Редко меняется, денормализация ускоряет чтение топ-авторов');
+print('   → Упрощает $lookup и отчёты по авторам');
+print('');
+print('✅ M:N relations set (news IDs embedded in authors_stats)');
 // Финальная статистика
 print('\n=== 📊 SEED DATA COMPLETED ===');
 print(`📰 News articles: ${db.news.countDocuments()}`);
