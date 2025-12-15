@@ -1,17 +1,14 @@
 #!/bin/bash
 
-# Папка с файлами лабы
 LAB_DIR="./5labscript"
 
-# Проверяем существование папки
 if [ ! -d "$LAB_DIR" ]; then
     echo "Ошибка: Папка $LAB_DIR не найдена!"
     exit 1
 fi
 
-echo "Копирование файлов из $LAB_DIR в контейнер..."
+echo "Копирование всех JS-скриптов в контейнер..."
 
-# Копируем все JS файлы из папки в контейнер
 for file in "$LAB_DIR"/*.js; do
     if [ -f "$file" ]; then
         filename=$(basename "$file")
@@ -19,41 +16,30 @@ for file in "$LAB_DIR"/*.js; do
         docker cp "$file" bd-mongos-1:/tmp/
     fi
 done
-# Выполняем скрипт инициализации (если есть)
-if [ -f "$LAB_DIR/mongo-init.js" ]; then
-    echo "Выполняем инициализацию..."
-    docker exec bd-mongos-1 mongosh /tmp/mongo-init.js
-fi
 
-if [ -f "$LAB_DIR/mongo-seed.js" ]; then
-    echo "Выполняем инициализацию..."
-    docker exec bd-mongos-1 mongosh /tmp/mongo-seed.js
-fi
-if [ -f "$LAB_DIR/sharding-setup.js" ]; then
-    echo "Выполняем инициализацию..."
-    docker exec bd-mongos-1 mongosh /tmp/sharding-setup.js
-fi
-if [ -f "$LAB_DIR/transactions.js.js" ]; then
-    echo "Выполняем инициализацию..."
-    docker exec bd-mongos-1 mongosh /tmp/transactions.js
-fi
-if [ -f "$LAB_DIR/create-index.js" ]; then
-    echo "Выполняем инициализацию..."
+echo "=== ВЫПОЛНЕНИЕ СКРИПТОВ В ПРАВИЛЬНОМ ПОРЯДКЕ ==="
+
+# 1. Инициализация (пользователи, индексы БЕЗ валидации)
+docker exec bd-mongos-1 mongosh /tmp/mongo-init.js
+
+# 2. Сид данных (заполняет коллекцию news)
+docker exec bd-mongos-1 mongosh /tmp/mongo-seed.js
+
+# 3. Применяем валидацию ПОСЛЕ того, как коллекция создана и зашардирована
+echo "Применяем schema validation..."
+docker exec bd-mongos-1 mongosh /tmp/apply-validation.js
+
+# 4. Остальные скрипты (опционально)
+if [ -f "/tmp/create-index.js" ]; then
     docker exec bd-mongos-1 mongosh /tmp/create-index.js
 fi
-docker exec bd-mongos-1 mongosh /tmp/data-mart-with-cache.js &   # Запускаем в фоне!
-CACHE_PID=$!
-if [ -f "$LAB_DIR/data-mart.js" ]; then
-    echo "Выполняем инициализацию..."
+
+if [ -f "/tmp/data-mart.js" ]; then
     docker exec bd-mongos-1 mongosh /tmp/data-mart.js
 fi
 
+# 5. Запускаем валидацию
+echo "Запуск теста валидации..."
+docker exec bd-mongos-1 mongosh /tmp/validation-test.js
 
-# Выполняем валидацию (если есть)
-if [ -f "$LAB_DIR/comprehensive-validation.js" ]; then
-    echo "Выполняем валидацию..."
-    docker exec bd-mongos-1 mongosh /tmp/comprehensive-validation.js
-fi
-
-
-echo "Готово!"
+echo "ВСЁ ГОТОВО! Проверь вывод выше — должны быть все ✅ в validation-test.js"
