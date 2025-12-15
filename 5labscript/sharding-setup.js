@@ -1,7 +1,9 @@
 // sharding-setup.js (run via mongosh -f sharding-setup.js --host mongos:27017)
 sh.enableSharding("news_aggregator");
-db.adminCommand({ shardCollection: "news_aggregator.news", key: { category: "hashed" } });  // Шардинг по category (hashed для равномерности)
-print('✅ Sharding enabled on news collection by category');
+db.adminCommand({ shardCollection: "news_aggregator.news", key: { _id: "hashed" } });  // Шардинг по category (hashed для равномерности)
+db.adminCommand({ shardCollection: "news_aggregator.authors_stats", key: { _id: "hashed" } });  // Добавлено для шардирования stats
+db.adminCommand({ shardCollection: "news_aggregator.comments", key: { _id: "hashed" } });  // Добавлено для шардирования comments
+print('✅ Sharding enabled on news, authors_stats, comments collections');
 
 // Тесты запросов
 print('\n=== SHARDING TESTS ===');

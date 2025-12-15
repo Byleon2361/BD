@@ -1,46 +1,39 @@
-// mongo-init.js
 db = db.getSiblingDB('news_aggregator');
 
 print('=== MONGODB INITIALIZATION - INDEXES & USERS ===');
 
-// 1. СОЗДАЕМ ПОЛЬЗОВАТЕЛЯ ПРИЛОЖЕНИЯ
+// 1. User
 db.createUser({
   user: 'news_user',
   pwd: 'news_password123',
-  roles: [
-    { role: 'readWrite', db: 'news_aggregator' },
-    { role: 'dbAdmin', db: 'news_aggregator' }
-  ]
+  roles: [{ role: 'readWrite', db: 'news_aggregator' }, { role: 'dbAdmin', db: 'news_aggregator' }]
 });
 print('✅ Application user created');
 
-// 2. СОЗДАЕМ ИНДЕКСЫ
+// 2. Indexes (БЕЗ unique на hash — он конфликтует с hashed shard key)
 print('Creating indexes...');
 
-// Основная коллекция: news
-db.news.createIndex({ "hash": 1 }, { unique: true });
 db.news.createIndex({ "category": 1, "metadata.publishDate": -1 });
 db.news.createIndex({ "metadata.publishDate": -1 });
 db.news.createIndex({ "source.name": 1 });
 db.news.createIndex({ "author.email": 1 });
 db.news.createIndex({ "metrics.views": -1 });
-// Текстовый индекс для полнотекстового поиска
-db.news.createIndex({ 
-    "title": "text", 
-    "content": "text",
-    "metadata.tags": "text"
-});
 
-// Коллекция авторов: authors_stats
+// Текстовый индекс — обязателен для $text поиска
+db.news.createIndex({
+    title: "text",
+    content: "text",
+    "metadata.tags": "text"
+}, { name: "text_search_index" });
+
 db.authors_stats.createIndex({ "authorName": 1 }, { unique: true });
 db.authors_stats.createIndex({ "totalViews": -1 });
 
-// Вспомогательная: categories
 db.categories.createIndex({ "name": 1 }, { unique: true });
 
-print('✅ All indexes created successfully');
-print('🚀 MongoDB is ready for seed data');
-// SCHEMA VALIDATION
+print('✅ All required indexes created');
+
+// 3. Schema validation — УСИЛЕННАЯ
 print('\n=== SETTING UP SCHEMA VALIDATION ===');
 
 db.runCommand({
@@ -50,19 +43,26 @@ db.runCommand({
             bsonType: "object",
             required: ["title", "category", "metrics"],
             properties: {
-                title: { bsonType: "string", description: "must be a string" },
-                category: { enum: ["politics", "sports", "technology", "entertainment", "business", "health", "science"], description: "must be one of predefined categories" },
+                title: { bsonType: "string" },
+                category: {
+                    enum: ["politics", "sports", "technology", "entertainment", "business", "health", "science"]
+                },
                 metrics: {
                     bsonType: "object",
+                    required: ["views"],
                     properties: {
-                        views: { bsonType: "int", minimum: 0, description: "views must be non-negative integer" }
+                        views: { bsonType: ["int", "long", "double", "decimal"], minimum: 0 }
                     }
                 },
-                "metadata.tags": { bsonType: "array", items: { bsonType: "string" }, description: "tags must be array of strings" }
+                "metadata.tags": {
+                    bsonType: "array",
+                    items: { bsonType: "string" }
+                }
             }
         }
     },
     validationLevel: "strict",
     validationAction: "error"
 });
-print('✅ Schema validation set for news collection (3 rules: views >=0, tags array of strings, category enum)');
+
+print('✅ Schema validation applied (required fields, enum category, views >= 0, tags array of strings)');
