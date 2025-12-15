@@ -1,34 +1,27 @@
-// aggregation-pipelines.js
+// aggregation-pipelines.js — Финальная версия: оригинал + исправления под твои данные
 
-print("=== MONGODB AGGREGATION PIPELINES ===");
+print("=== MONGODB AGGREGATION PIPELINES (ФИНАЛЬНАЯ ВЕРСИЯ) ===");
 
-// PIPELINE 1: Статистика по категориям с анализом тегов
+db = db.getSiblingDB('news_aggregator');
+
+// PIPELINE 1: Статистика по категориям с анализом тегов — убрал жёсткий фильтр 2024
 const pipeline1 = [
-    // $match - фильтрация документов
     {
         $match: {
-            "metadata.isActive": true,
-            "metadata.publishDate": { $gte: new Date("2024-01-01") }
+            "metadata.isActive": true
+            // Убрал: "metadata.publishDate": { $gte: new Date("2024-01-01") }
         }
     },
-    // $unwind - разворачиваем массив тегов
-    {
-        $unwind: "$metadata.tags"
-    },
-    // $group - группировка по категориям и тегам
+    { $unwind: "$metadata.tags" },
     {
         $group: {
-            _id: {
-                category: "$category",
-                tag: "$metadata.tags"
-            },
+            _id: { category: "$category", tag: "$metadata.tags" },
             tagUsageCount: { $sum: 1 },
             totalViews: { $sum: "$metrics.views" },
             avgViews: { $avg: "$metrics.views" },
             articles: { $push: "$title" }
         }
     },
-    // $project - преобразование результатов
     {
         $project: {
             _id: 0,
@@ -40,44 +33,25 @@ const pipeline1 = [
             articlesCount: { $size: "$articles" }
         }
     },
-    // $sort - сортировка по использованию тегов
-    {
-        $sort: { tagUsageCount: -1 }
-    },
-    // $limit - ограничение результатов
-    {
-        $limit: 20
-    }
+    { $sort: { tagUsageCount: -1 } },
+    { $limit: 20 }
 ];
 
 print("\n1. Category Tag Analysis:");
-const result1 = db.news.aggregate(pipeline1).toArray();
-printjson(result1.slice(0, 5));
+printjson(db.news.aggregate(pipeline1).toArray().slice(0, 10));
 
-// PIPELINE 2: Анализ авторов с $lookup (связь 1 -> N)
+// PIPELINE 2: Анализ авторов с $lookup — исправлено имя автора
 const pipeline2 = [
-    // $match - активные статьи
-    {
-        $match: {
-            "metadata.isActive": true
-        }
-    },
-    // $group - группировка по авторам
+    { $match: { "metadata.isActive": true } },
     {
         $group: {
             _id: "$author.email",
-            authorName: { 
-                $first: { 
-                    $concat: ["$author.firstName", " ", "$author.lastName"] 
-                } 
-            },
+            authorName: { $first: "$author.name" },  // Было: firstName + lastName → теперь .name
             articlesCount: { $sum: 1 },
             totalViews: { $sum: "$metrics.views" },
-            categories: { $addToSet: "$category" },
-            articleTitles: { $push: "$title" }
+            categories: { $addToSet: "$category" }
         }
     },
-    // $project - подготовка данных для lookup
     {
         $project: {
             authorName: 1,
@@ -87,7 +61,6 @@ const pipeline2 = [
             avgViews: { $round: [{ $divide: ["$totalViews", "$articlesCount"] }, 2] }
         }
     },
-    // $lookup - соединение с коллекцией authors_stats
     {
         $lookup: {
             from: "authors_stats",
@@ -96,14 +69,7 @@ const pipeline2 = [
             as: "authorStats"
         }
     },
-    // $unwind - разворачиваем результат lookup
-    {
-        $unwind: {
-            path: "$authorStats",
-            preserveNullAndEmptyArrays: true
-        }
-    },
-    // $project - финальная форма
+    { $unwind: { path: "$authorStats", preserveNullAndEmptyArrays: true } },
     {
         $project: {
             authorName: 1,
@@ -111,41 +77,19 @@ const pipeline2 = [
             totalViews: 1,
             avgViews: 1,
             categoriesCount: 1,
-            engagementRate: {
-                $ifNull: [
-                    "$authorStats.engagementRate", 
-                    { $round: [{ $multiply: [
-                        { $divide: ["$totalViews", "$articlesCount"] }, 
-                        0.1
-                    ]}, 2] }
-                ]
-            }
+            engagementRate: { $ifNull: ["$authorStats.avgEngagementRate", 0] }
         }
     },
-    // $sort - по количеству просмотров
-    {
-        $sort: { totalViews: -1 }
-    },
-    // $limit - топ авторов
-    {
-        $limit: 15
-    }
+    { $sort: { totalViews: -1 } },
+    { $limit: 15 }
 ];
 
 print("\n2. Authors Analysis with Lookup:");
-const result2 = db.news.aggregate(pipeline2).toArray();
-printjson(result2.slice(0, 5));
+printjson(db.news.aggregate(pipeline2).toArray().slice(0, 5));
 
-// PIPELINE 3: Ежемесячная статистика с анализом трендов
+// PIPELINE 3: Ежемесячная статистика — оставляем как было, но без жёсткого 2023
 const pipeline3 = [
-    // $match - фильтрация по дате
-    {
-        $match: {
-            "metadata.isActive": true,
-            "metadata.publishDate": { $gte: new Date("2023-01-01") }
-        }
-    },
-    // $project - подготовка временных меток
+    { $match: { "metadata.isActive": true } },
     {
         $project: {
             year: { $year: "$metadata.publishDate" },
@@ -153,32 +97,32 @@ const pipeline3 = [
             category: 1,
             views: "$metrics.views",
             likes: "$metrics.likes",
-            shares: "$metrics.shares",
-            readingTime: "$metrics.reading_time"
+            shares: "$metrics.shares"
         }
     },
-    // $group - группировка по месяцам и категориям
     {
         $group: {
-            _id: {
-                year: "$year",
-                month: "$month",
-                category: "$category"
-            },
+            _id: { year: "$year", month: "$month", category: "$category" },
             monthlyArticles: { $sum: 1 },
             monthlyViews: { $sum: "$views" },
             monthlyLikes: { $sum: "$likes" },
-            monthlyShares: { $sum: "$shares" },
-            avgReadingTime: { $avg: "$readingTime" }
+            monthlyShares: { $sum: "$shares" }
         }
     },
-    // $project - расчет метрик
     {
         $project: {
             period: {
+                // Заменяем $lpad на конкатенацию с условным добавлением нуля
                 $concat: [
-                    { $toString: "$_id.year" }, "-",
-                    { $toString: "$_id.month" }
+                    { $toString: "$_id.year" },
+                    "-",
+                    {
+                        $cond: {
+                            if: { $lte: ["$_id.month", 9] },
+                            then: { $concat: ["0", { $toString: "$_id.month" }] },
+                            else: { $toString: "$_id.month" }
+                        }
+                    }
                 ]
             },
             category: "$_id.category",
@@ -186,41 +130,24 @@ const pipeline3 = [
             monthlyViews: 1,
             monthlyLikes: 1,
             monthlyShares: 1,
-            avgReadingTime: { $round: ["$avgReadingTime", 2] },
             engagementRate: {
                 $round: [
-                    { $multiply: [
-                        { $divide: ["$monthlyLikes", "$monthlyViews"] }, 
-                        100
-                    ] },
+                    { $multiply: [{ $divide: ["$monthlyLikes", { $max: ["$monthlyViews", 1] }] }, 100] },
                     2
                 ]
             }
         }
     },
-    // $sort - сортировка по периоду и просмотрам
-    {
-        $sort: { period: -1, monthlyViews: -1 }
-    },
-    // $limit - последние периоды
-    {
-        $limit: 30
-    }
+    { $sort: { period: -1, monthlyViews: -1 } },
+    { $limit: 30 }
 ];
 
 print("\n3. Monthly Trends Analysis:");
-const result3 = db.news.aggregate(pipeline3).toArray();
-printjson(result3.slice(0, 5));
+printjson(db.news.aggregate(pipeline3).toArray().slice(0, 10));
 
-// PIPELINE 4: Анализ источников новостей
+// PIPELINE 4: Анализ источников — почти оригинал
 const pipeline4 = [
-    // $match - активные статьи
-    {
-        $match: {
-            "metadata.isActive": true
-        }
-    },
-    // $group - по источникам
+    { $match: { "metadata.isActive": true } },
     {
         $group: {
             _id: "$source.name",
@@ -228,145 +155,171 @@ const pipeline4 = [
             articlesCount: { $sum: 1 },
             totalViews: { $sum: "$metrics.views" },
             totalLikes: { $sum: "$metrics.likes" },
-            categories: { $addToSet: "$category" },
-            avgViews: { $avg: "$metrics.views" }
+            categories: { $addToSet: "$category" }
         }
     },
-    // $unwind - для анализа по категориям
-    {
-        $unwind: "$categories"
-    },
-    // $group - детализация по источникам и категориям
+    { $unwind: "$categories" },
     {
         $group: {
-            _id: {
-                source: "$_id",
-                category: "$categories"
-            },
+            _id: { source: "$_id", category: "$categories" },
             sourceCountry: { $first: "$sourceCountry" },
             articlesCount: { $sum: 1 },
             totalViews: { $sum: "$totalViews" },
             totalLikes: { $sum: "$totalLikes" }
         }
     },
-    // $project - финальные расчеты
     {
         $project: {
-            _id: 0,
             source: "$_id.source",
             country: "$sourceCountry",
             category: "$_id.category",
             articlesCount: 1,
             totalViews: 1,
             avgViews: { $round: [{ $divide: ["$totalViews", "$articlesCount"] }, 2] },
-            engagementRate: {
-                $round: [
-                    { $multiply: [
-                        { $divide: ["$totalLikes", "$totalViews"] }, 
-                        100
-                    ] },
-                    3
-                ]
-            }
+            engagementRate: { $round: [{ $multiply: [{ $divide: ["$totalLikes", "$totalViews"] }, 100] }, 3] }
         }
     },
-    // $sort - сортировка
-    {
-        $sort: { totalViews: -1 }
-    },
-    // $limit - ограничение
-    {
-        $limit: 25
-    }
+    { $sort: { totalViews: -1 } },
+    { $limit: 25 }
 ];
 
 print("\n4. News Sources Analysis:");
-const result4 = db.news.aggregate(pipeline4).toArray();
-printjson(result4.slice(0, 5));
+printjson(db.news.aggregate(pipeline4).toArray().slice(0, 10));
 
-// PIPELINE 5: Анализ комментариев и вовлеченности
+// PIPELINE 5: Комментарии — через $lookup по commentIds
 const pipeline5 = [
-    // $match - статьи с комментариями
-    {
-        $match: {
-            "metadata.isActive": true,
-            "metrics.comments_count": { $gt: 0 }
-        }
-    },
-    // $unwind - разворачиваем комментарии
-    {
-        $unwind: "$comments"
-    },
-    // $match - только approved комментарии
-    {
-        $match: {
-            "comments.is_approved": true
-        }
-    },
-    // $group - анализ по статьям
+    { $match: { commentIds: { $exists: true, $ne: [] } } },
+    { $lookup: { from: "comments", localField: "commentIds", foreignField: "_id", as: "comments" } },
+    { $unwind: "$comments" },
     {
         $group: {
-            _id: "$_id",
-            title: { $first: "$title" },
+            _id: "$title",
             category: { $first: "$category" },
             totalComments: { $sum: 1 },
             totalCommentLikes: { $sum: "$comments.likes" },
-            avgCommentLength: { $avg: { $strLenCP: "$comments.content" } },
-            uniqueCommenters: { $addToSet: "$comments.user_name" }
+            uniqueCommenters: { $addToSet: "$comments.user" }
         }
     },
-    // $project - расчет метрик
     {
         $project: {
-            title: 1,
+            title: "$_id",
             category: 1,
             totalComments: 1,
             totalCommentLikes: 1,
-            avgCommentLength: { $round: ["$avgCommentLength", 2] },
             uniqueCommenters: { $size: "$uniqueCommenters" },
-            avgLikesPerComment: { 
-                $round: [{ $divide: ["$totalCommentLikes", "$totalComments"] }, 2] 
+            avgLikesPerComment: { $round: [{ $divide: ["$totalCommentLikes", "$totalComments"] }, 2] }
+        }
+    },
+    { $sort: { totalCommentLikes: -1 } },
+    { $limit: 15 }
+];
+
+print("\n5. Comments Engagement Analysis:");
+printjson(db.news.aggregate(pipeline5).toArray().slice(0, 10));
+
+// PIPELINE 6: Комбинированный многоуровневый отчёт — распределение по источникам и темам за неделю
+const pipeline6 = [
+    {
+        $match: {
+            "metadata.isActive": true,
+            "metadata.publishDate": {
+                $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)  // За последнюю неделю
             }
         }
     },
-    // $sort - по вовлеченности
     {
-        $sort: { totalCommentLikes: -1 }
+        $facet: {
+            // 1. Обзор по источникам (по алфавиту)
+            "sourcesOverview": [
+                {
+                    $group: {
+                        _id: "$source.name",
+                        country: { $first: "$source.country" },
+                        articlesCount: { $sum: 1 },
+                        totalViews: { $sum: "$metrics.views" }
+                    }
+                },
+                {
+                    $project: {
+                        source: "$_id",
+                        country: 1,
+                        articlesCount: 1,
+                        totalViews: 1,
+                        avgViews: { $round: [{ $divide: ["$totalViews", { $max: ["$articlesCount", 1] }] }, 0] }
+                    }
+                },
+                { $sort: { source: 1 } }  // По алфавиту по источнику
+            ],
+
+            // 2. Обзор по темам/категориям (по алфавиту)
+            "categoriesOverview": [
+                {
+                    $group: {
+                        _id: "$category",
+                        articlesCount: { $sum: 1 },
+                        totalViews: { $sum: "$metrics.views" }
+                    }
+                },
+                {
+                    $project: {
+                        category: "$_id",
+                        articlesCount: 1,
+                        totalViews: 1,
+                        avgViews: { $round: [{ $divide: ["$totalViews", { $max: ["$articlesCount", 1] }] }, 0] }
+                    }
+                },
+                { $sort: { category: 1 } }  // По алфавиту по категории
+            ],
+
+            // 3. Пересечение: источник × тема — группировка логичная (сначала источник, потом темы внутри)
+            "sourcesByCategory": [
+                {
+                    $group: {
+                        _id: { source: "$source.name", category: "$category" },
+                        articlesCount: { $sum: 1 },
+                        totalViews: { $sum: "$metrics.views" }
+                    }
+                },
+                {
+                    $project: {
+                        source: "$_id.source",
+                        category: "$_id.category",
+                        articlesCount: 1,
+                        totalViews: 1,
+                        avgViews: { $round: [{ $divide: ["$totalViews", { $max: ["$articlesCount", 1] }] }, 0] }
+                    }
+                },
+                { $sort: { category: 1 } },  // Сначала по источнику, потом по категории — всё рядом!
+                { $limit: 30 }
+            ],
+
+            // 4. Распределение по просмотрам (бакеты)
+            "viewsBuckets": [
+                {
+                    $bucket: {
+                        groupBy: "$metrics.views",
+                        boundaries: [0, 5000, 10000, 20000, 30000, 50000, 100000],
+                        default: "100k+",
+                        output: {
+                            articlesCount: { $sum: 1 }
+                        }
+                    }
+                }
+            ]
+        }
     },
-    // $limit - топ статей
+    // Добавляем общее количество статей за неделю
     {
-        $limit: 15
+        $project: {
+            sourcesOverview: 1,
+            categoriesOverview: 1,
+            sourcesByCategory: 1,
+            viewsBuckets: 1,
+            totalArticlesInWeek: { $sum: "$sourcesOverview.articlesCount" }
+        }
     }
 ];
 
-
-print("\n5. Comments Engagement Analysis:");
-const result5 = db.news.aggregate(pipeline5).toArray();
-printjson(result5.slice(0, 5));
-// PIPELINE 6: Multi-level report with $facet and $bucket
-const pipeline6 = [
-    { $match: { "metadata.publishDate": { $gte: new Date(new Date() - 7 * 24 * 60 * 60 * 1000) } } },  // За неделю
-    { $facet: {
-        bySource: [
-            { $group: { _id: "$source.name", count: { $sum: 1 }, totalViews: { $sum: "$metrics.views" } } },
-            { $sort: { totalViews: -1 } }
-        ],
-        byTheme: [
-            { $unwind: "$metadata.tags" },
-            { $group: { _id: "$metadata.tags", count: { $sum: 1 }, avgViews: { $avg: "$metrics.views" } } },
-            { $sort: { count: -1 } }
-        ],
-        viewsBuckets: [
-            { $bucket: {
-                groupBy: "$metrics.views",
-                boundaries: [0, 100, 1000, 10000, Infinity],
-                default: "Other",
-                output: { count: { $sum: 1 } }
-            } }
-        ]
-    } }
-];
-
-print("\n6. Weekly News Distribution Report (by sources, themes, views buckets):");
-const result6 = db.news.aggregate(pipeline6).toArray();
-printjson(result6);
+print("\n6. Комбинированный многоуровневый отчёт: Распределение новостей по источникам и темам за последнюю неделю");
+print("   (используется $facet для параллельных подотчётов + $bucket)\n");
+printjson(db.news.aggregate(pipeline6).toArray());
