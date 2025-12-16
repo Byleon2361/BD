@@ -351,19 +351,109 @@ db.news.updateOne(
     }
 );
 // BULK OPERATIONS
-print("\n=== BULK WRITE OPERATIONS (MIXED TYPES) ===");
+print("\n=== BULK WRITE OPERATIONS — МАССОВАЯ ПАКЕТНАЯ ОБРАБОТКА ===");
 
-const bulkOps = [
-    { insertOne: { document: { title: "Bulk Insert 1", category: "technology", metrics: { views: 100 } } } },  // Insert
-    { insertOne: { document: { title: "Bulk Insert 2", category: "sports", metrics: { views: 200 } } } },      // Insert
-    { updateOne: { filter: { title: "Bulk Insert 1" }, update: { $inc: { "metrics.views": 50 } } } },         // Update
-    { deleteOne: { filter: { title: "Bulk Insert 2" } } },                                                     // Delete
-    { replaceOne: { filter: { title: "Bulk Insert 1" }, replacement: { title: "Replaced Bulk", category: "politics", metrics: { views: 300 } } } }  // Replace
-];
+const bulkOps = [];
 
-const bulkResult = db.news.bulkWrite(bulkOps);
-printjson(bulkResult);
-print('✅ Bulk write completed: 2 inserts, 1 update, 1 delete, 1 replace');
+// 200 вставок
+for (let i = 1; i <= 200; i++) {
+    bulkOps.push({
+        insertOne: {
+            document: {
+                title: `Bulk Article ${i}`,
+                category: i % 2 === 0 ? "technology" : "sports",
+                hash: `bulk_hash_${i}`,
+                metrics: { views: i * 100, likes: i * 5, shares: i * 2, comments_count: 0 },
+                metadata: {
+                    publishDate: new Date(),
+                    isActive: true,
+                    tags: ["bulk", "test", i % 3 === 0 ? "ai" : "news"]
+                }
+            }
+        }
+    });
+}
+
+// 100 обновлений
+for (let i = 1; i <= 100; i++) {
+    bulkOps.push({
+        updateOne: {
+            filter: { title: `Bulk Article ${i}` },
+            update: { 
+                $inc: { "metrics.views": 50, "metrics.likes": 10 },
+                $set: { "metadata.updatedAt": new Date() }
+            }
+        }
+    });
+}
+
+// 50 замен
+for (let i = 101; i <= 150; i++) {
+    bulkOps.push({
+        replaceOne: {
+            filter: { title: `Bulk Article ${i}` },
+            replacement: {
+                title: `Replaced Article ${i}`,
+                category: "entertainment",
+                metrics: { views: i * 200, likes: i * 15 },
+                metadata: { isActive: false, publishDate: new Date() }
+            }
+        }
+    });
+}
+
+// 30 удалений
+for (let i = 151; i <= 180; i++) {
+    bulkOps.push({
+        deleteOne: { filter: { title: `Bulk Article ${i}` } }
+    });
+}
+
+// 11 upsert'ов
+for (let i = 1000; i <= 1010; i++) {
+    bulkOps.push({
+        updateOne: {
+            filter: { hash: `upsert_hash_${i}` },
+            update: { $set: { title: `Upserted Article ${i}`, category: "business" } },
+            upsert: true
+        }
+    });
+}
+
+print(`Подготовлено ${bulkOps.length} операций (insert, update, replace, delete, upsert)`);
+
+try {
+    const bulkResult = db.news.bulkWrite(
+        bulkOps,
+        { ordered: false }  // продолжаем даже при ошибках в отдельных операциях
+    );
+
+    print("✅ Bulk write успешно выполнен!");
+    printjson({
+        insertedCount: bulkResult.insertedCount || 0,
+        matchedCount: bulkResult.matchedCount || 0,
+        modifiedCount: bulkResult.modifiedCount || 0,
+        deletedCount: bulkResult.deletedCount || 0,
+        upsertedCount: bulkResult.upsertedIds ? Object.keys(bulkResult.upsertedIds).length : 0,
+        totalOperations: bulkOps.length
+    });
+
+    if (bulkResult.writeErrors && bulkResult.writeErrors.length > 0) {
+        print(`\n⚠️ Ошибок в отдельных операциях: ${bulkResult.writeErrors.length}`);
+        bulkResult.writeErrors.slice(0, 5).forEach((err, idx) => {
+            print(`   Ошибка ${err.index}: ${err.errmsg}`);
+        });
+    } else {
+        print("\n🎉 Все операции выполнены без ошибок!");
+    }
+
+} catch (e) {
+    print("❌ Критическая ошибка при bulkWrite:");
+    printjson(e);
+}
+
+print("=== Bulk operations завершены ===\n");
+
 // updateMany с $inc для счетчиков
 db.news.updateMany(
     { category: "technology", "metadata.isActive": true },

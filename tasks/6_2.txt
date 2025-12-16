@@ -38,3 +38,10 @@ docker exec -it bd-mongos-1 mongosh /tmp/aggregation-pipelines.js
 
 валидация
 ./setup-mongo.sh
+
+оптимизация
+docker exec -it bd-mongos-1 mongosh /tmp/mongo-seed-big.js
+docker exec -it bd-mongos-1 mongosh /tmp/query-optimization.js
+
+булк
+docker exec -it bd-mongos-1 mongosh /tmp/mongo-operations.js
