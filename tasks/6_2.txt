@@ -29,3 +29,12 @@ docker exec bd-mongos-1 mongosh /tmp/comprehensive-validation.js
 docker exec -it bd-mongos-1 mongosh
 use news_aggregator
 db.news.getShardDistribution()
+
+
+
+группировка по категориям
+docker cp ./5labscript/aggregation-pipelines.js bd-mongos-1:/tmp/
+docker exec -it bd-mongos-1 mongosh /tmp/aggregation-pipelines.js
+
+валидация
+./setup-mongo.sh
