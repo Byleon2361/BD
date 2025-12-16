@@ -169,7 +169,12 @@ services:
       - "27017:27017"
     volumes:
       - bd_mongodb_data:/data/db
-    command: "--noauth"
+      - ./5labscript:/docker-entrypoint-initdb.d:ro  # Скрипты выполнятся автоматически
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: news_aggregator
+    command: --bind_ip_all  # Без --noauth, auth включится после init
     networks:
       - bd_default
     restart: unless-stopped
@@ -187,6 +192,19 @@ services:
       - bd_default
     depends_on:
       - mongodb
+    restart: unless-stopped
+
+  news-api: # НОВЫЙ СЕРВИС
+    build:
+      context: .
+      dockerfile: Dockerfile.api   # имя файла, который ты создал на шаге 1
+    container_name: bd-news-api
+    ports:
+      - "3000:3000"                # чтобы с хоста можно было зайти на localhost:3000
+    depends_on:
+      - mongodb                    # ждём, пока MongoDB запустится
+    networks:
+      - bd_default
     restart: unless-stopped
 
 volumes:
