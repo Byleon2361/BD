@@ -1,8 +1,7 @@
-#основной - docker compose -f docker-compose.yml up (или как обычно)
 version: '3.8'
 
 services:
-  # ==================== POSTGRESQL (оставляем как есть) ====================
+  # ==================== POSTGRESQL ====================
   postgres:
     image: postgres:15
     container_name: bd-postgres-1
@@ -29,7 +28,7 @@ services:
     networks:
       - bd_default
 
-  # ==================== MONITORING (оставляем) ====================
+  # ==================== MONITORING ====================
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: postgres-exporter
@@ -67,7 +66,8 @@ services:
     depends_on:
       - prometheus
 
-  # ==================== MONGODB SHARDING — ЭТО ТО, ЧТО НУЖНО! ====================
+  # ==================== MONGODB SHARDING С РЕПЛИКАЦИЕЙ ====================
+  # Конфигурационный сервер
   mongo-config:
     image: mongo:7.0
     container_name: bd-mongo-config-1
@@ -77,6 +77,7 @@ services:
     networks:
       - bd_default
 
+  # Шард 1 с основной нодой и репликой
   mongo-shard1:
     image: mongo:7.0
     container_name: bd-mongo-shard1-1
@@ -86,6 +87,16 @@ services:
     networks:
       - bd_default
 
+  mongo-shard1-replica:
+    image: mongo:7.0
+    container_name: bd-mongo-shard1-1-replica
+    command: mongod --shardsvr --replSet shard1rs --port 27017
+    volumes:
+      - mongo_shard1_replica_data:/data/db
+    networks:
+      - bd_default
+
+  # Шард 2 с основной нодой и репликой
   mongo-shard2:
     image: mongo:7.0
     container_name: bd-mongo-shard2-1
@@ -95,6 +106,16 @@ services:
     networks:
       - bd_default
 
+  mongo-shard2-replica:
+    image: mongo:7.0
+    container_name: bd-mongo-shard2-1-replica
+    command: mongod --shardsvr --replSet shard2rs --port 27017
+    volumes:
+      - mongo_shard2_replica_data:/data/db
+    networks:
+      - bd_default
+
+  # Mongos router
   mongos:
     image: mongo:7.0
     container_name: bd-mongos-1
@@ -105,6 +126,8 @@ services:
       - mongo-config
       - mongo-shard1
       - mongo-shard2
+      - mongo-shard1-replica
+      - mongo-shard2-replica
     networks:
       - bd_default
     healthcheck:
@@ -151,7 +174,9 @@ volumes:
   grafana_data:
   mongo_config_data:
   mongo_shard1_data:
+  mongo_shard1_replica_data:
   mongo_shard2_data:
+  mongo_shard2_replica_data:
 
 networks:
   bd_default:
