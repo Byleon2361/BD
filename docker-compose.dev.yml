@@ -1,0 +1,24 @@
+# для эндпоинтов. Запуск: docker compose -f docker-compose.dev.yml up
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: bd-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - bd_mongodb_data:/data/db
+      - ./5labscript:/docker-entrypoint-initdb.d:ro
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: news_aggregator
+    command: --bind_ip_all
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+volumes:
+  bd_mongodb_data:

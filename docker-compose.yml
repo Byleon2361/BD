@@ -1,3 +1,4 @@
+#основной - docker compose -f docker-compose.yml up (или как обычно)
 version: '3.8'
 
 services:
@@ -113,13 +114,31 @@ services:
     ports:
       - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: mongodb://bd-mongos-1:27017
-      ME_CONFIG_BASICAUTH_USERNAME: admin
-      ME_CONFIG_BASICAUTH_PASSWORD: admin
-    depends_on:
-      - mongos
+      ME_CONFIG_MONGODB_URL: "mongodb://root:rootpass@mongodb:27017"  # ← Исправлено: с root логином
+      ME_CONFIG_BASICAUTH_USERNAME: "admin"
+      ME_CONFIG_BASICAUTH_PASSWORD: "admin"
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpass
     networks:
       - bd_default
+    depends_on:
+      mongodb:
+        condition: service_healthy            # ← Ждём полной готовности
+    restart: unless-stopped
+
+  news-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: bd-news-api
+    ports:
+      - "3000:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy            # ← КЛЮЧЕВОЕ: ждём, пока MongoDB полностью готова
+    networks:
+      - bd_default
+    restart: unless-stopped
 
 volumes:
   postgres_data:
