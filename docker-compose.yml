@@ -49,6 +49,7 @@ services:
       - "9090:9090"
     volumes:
       - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
     networks:
       - bd_default
 
@@ -108,24 +109,56 @@ services:
     networks:
       - bd_default
 
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.44.0-amd64
+    container_name: bd-mongodb-exporter
+    ports:
+      - "9217:9216"
+    environment:
+      MONGODB_URI: mongodb://bd-mongos-1:27017/admin  # Без auth, т.к. в кластере auth не включена
+    command:
+      - "--mongodb.uri=mongodb://bd-mongos-1:27017/admin"
+      - "--web.listen-address=:9216"
+      - "--collect-all"
+      - "--collector.shards"
+      - "--compatible-mode"
+    depends_on:
+      - mongos
+    networks:
+      - bd_default
+    restart: unless-stopped
+  mongodb-exporter-shard:
+    image: percona/mongodb_exporter:0.44.0-amd64
+    container_name: bd-mongodb-exporter-shard
+    ports:
+      - "9218:9216"
+    command:
+      - "--collect-all"
+      - "--compatible-mode"
+      - "--mongodb.uri=mongodb://bd-mongo-shard1-1:27017/admin"
+      - "--web.listen-address=:9216"
+    depends_on:
+      - mongo-shard1
+    networks:
+      - bd_default
+    restart: unless-stopped
+  # ==================== MONGODB TOOLS ====================
   mongo-express:
-    image: mongo-express
+    image: mongo-express:latest
     container_name: bd-mongo-express
     ports:
       - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: "mongodb://root:rootpass@mongodb:27017"  # ← Исправлено: с root логином
-      ME_CONFIG_BASICAUTH_USERNAME: "admin"
-      ME_CONFIG_BASICAUTH_PASSWORD: "admin"
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpass
+      ME_CONFIG_MONGODB_URL: mongodb://bd-mongos-1:27017  # Убрали root:rootpass — auth выключена
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
     networks:
       - bd_default
     depends_on:
-      mongodb:
-        condition: service_healthy            # ← Ждём полной готовности
+      - mongos
     restart: unless-stopped
 
+  # ==================== APPLICATION ====================
   news-api:
     build:
       context: .
@@ -134,8 +167,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      mongodb:
-        condition: service_healthy            # ← КЛЮЧЕВОЕ: ждём, пока MongoDB полностью готова
+      - mongos
     networks:
       - bd_default
     restart: unless-stopped

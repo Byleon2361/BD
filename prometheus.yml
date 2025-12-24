@@ -20,6 +20,25 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
+  - job_name: 'mongodb-mongos'
+    static_configs:
+      - targets: ['bd-mongodb-exporter:9216']   # <-- ВАЖНО: замените, если имя другое
+    scrape_interval: 10s
+    metrics_path: /metrics
+    # Опционально: добавляем лейбл cluster для удобства в дашборде
+    relabel_configs:
+      - target_label: cluster
+        replacement: my-mongo-cluster
+  - job_name: 'mongodb-shard'
+    static_configs:
+      - targets: ['bd-mongodb-exporter-shard:9216']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: cluster
+        replacement: my-mongo-cluster
+      - target_label: role
+        replacement: shard
 alerting:
   alertmanagers:
     - static_configs:
