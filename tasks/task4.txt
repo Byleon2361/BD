@@ -17,3 +17,18 @@ docker exec -it bd-postgres-replica psql -U postgres -d news_aggregator -c "SELE
 
 Удаленик записи из бд 
 docker exec -it bd-postgres-1 psql -U postgres -d news_aggregator -c "DELETE FROM test_replication WHERE id = 1;"
+
+Для проверки mongo реплики
+docker exec -it bd-mongo-shard1-1-replica mongosh --eval "rs.status()"
+docker exec -it bd-mongo-shard1-1 mongosh --eval "rs.status()"
+
+если не работает монго 
+ docker exec bd-mongo-config-1 mongosh --port 27017 --eval "
+  rs.initiate({
+    _id: 'configrs',
+    configsvr: true,
+    members: [
+      { _id: 0, host: 'bd-mongo-config-1:27017' }
+    ]
+  })
+  "

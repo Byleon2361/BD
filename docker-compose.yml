@@ -1,8 +1,6 @@
-#основной - docker compose -f docker-compose.yml up (или как обычно)
 version: '3.8'
-
 services:
-  # ==================== POSTGRESQL (оставляем как есть) ====================
+  # ==================== POSTGRESQL ====================
   postgres:
     image: postgres:15
     container_name: bd-postgres-1
@@ -14,8 +12,40 @@ services:
       POSTGRES_PASSWORD: password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./complete_news_database_postgres.sql:/docker-entrypoint-initdb.d/complete_news_database_postgres.sql
     networks:
       - bd_default
+    command: >
+      bash -c "
+        # Запускаем стандартный entrypoint в фоне
+        docker-entrypoint.sh postgres &
+        PG_PID=$!
+       
+        # Ждем запуска БД
+        until pg_isready -U postgres; do
+          echo 'Waiting for primary to be ready...'
+          sleep 2
+        done
+       
+        # Настраиваем репликацию
+        echo 'Configuring replication...'
+        psql -U postgres -c \"CREATE USER replicator WITH REPLICATION PASSWORD 'replica_pass';\" 2>/dev/null || true
+        psql -U postgres -c \"ALTER SYSTEM SET wal_level = replica;\"
+        psql -U postgres -c \"ALTER SYSTEM SET max_wal_senders = 10;\"
+        psql -U postgres -c \"ALTER SYSTEM SET max_replication_slots = 10;\"
+       
+        # Добавляем правило в pg_hba.conf
+        echo 'host replication replicator all md5' >> /var/lib/postgresql/data/pg_hba.conf
+        echo 'host all replicator all md5' >> /var/lib/postgresql/data/pg_hba.conf
+       
+        # Перезагружаем конфигурацию
+        psql -U postgres -c \"SELECT pg_reload_conf();\"
+       
+        echo 'Primary database configured for replication'
+       
+        # Ждем завершения основного процесса PostgreSQL
+        wait $PG_PID
+      "
 
   postgres-replica:
     image: postgres:15
@@ -24,12 +54,57 @@ services:
       - postgres
     ports:
       - "5433:5432"
+    environment:
+      POSTGRES_PASSWORD: password
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
     networks:
       - bd_default
+    command: >
+      bash -c "
+        # Ждем готовности основной БД
+        until pg_isready -h postgres -p 5432 -U postgres; do
+          echo 'Waiting for primary database...'
+          sleep 5
+        done
+       
+        # Даем дополнительное время для полной инициализации
+        sleep 10
+       
+        echo 'Primary database is ready, setting up replica...'
+       
+        # Очищаем директорию данных реплики
+        rm -rf /var/lib/postgresql/data/*
+       
+        # Создаем базовую копию с правильными параметрами
+        PGPASSWORD=replica_pass pg_basebackup -h postgres -U replicator -p 5432 -D /var/lib/postgresql/data -P -R -X stream -C -S replica_slot
+       
+        # Устанавливаем правильные права
+        chown -R postgres:postgres /var/lib/postgresql/data/
+       
+        # Настраиваем файл standby.signal для режима standby
+        touch /var/lib/postgresql/data/standby.signal
+       
+        echo 'Replica setup complete, starting PostgreSQL...'
+       
+        # Запускаем PostgreSQL
+        exec docker-entrypoint.sh postgres
+      "
 
-  # ==================== MONITORING (оставляем) ====================
+  # ==================== REDIS ====================
+  redis:
+    image: redis:7-alpine
+    container_name: bd-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bd_default
+    command: redis-server --appendonly yes  # Включаем AOF для персистентности
+    restart: unless-stopped
+
+  # ==================== MONITORING ====================
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: postgres-exporter
@@ -67,7 +142,8 @@ services:
     depends_on:
       - prometheus
 
-  # ==================== MONGODB SHARDING — ЭТО ТО, ЧТО НУЖНО! ====================
+  # ==================== MONGODB SHARDING С РЕПЛИКАЦИЕЙ ====================
+  # Конфигурационный сервер
   mongo-config:
     image: mongo:7.0
     container_name: bd-mongo-config-1
@@ -77,6 +153,7 @@ services:
     networks:
       - bd_default
 
+  # Шард 1 с основной нодой и репликой
   mongo-shard1:
     image: mongo:7.0
     container_name: bd-mongo-shard1-1
@@ -86,6 +163,16 @@ services:
     networks:
       - bd_default
 
+  mongo-shard1-replica:
+    image: mongo:7.0
+    container_name: bd-mongo-shard1-1-replica
+    command: mongod --shardsvr --replSet shard1rs --port 27017
+    volumes:
+      - mongo_shard1_replica_data:/data/db
+    networks:
+      - bd_default
+
+  # Шард 2 с основной нодой и репликой
   mongo-shard2:
     image: mongo:7.0
     container_name: bd-mongo-shard2-1
@@ -95,18 +182,36 @@ services:
     networks:
       - bd_default
 
+  mongo-shard2-replica:
+    image: mongo:7.0
+    container_name: bd-mongo-shard2-1-replica
+    command: mongod --shardsvr --replSet shard2rs --port 27017
+    volumes:
+      - mongo_shard2_replica_data:/data/db
+    networks:
+      - bd_default
+
+  # Mongos router
   mongos:
     image: mongo:7.0
     container_name: bd-mongos-1
     command: mongos --configdb configrs/bd-mongo-config-1:27017 --port 27017 --bind_ip_all
     ports:
-      - "27017:27017"   # ← ВАЖНО: теперь 27017 — это mongos!
+      - "27017:27017"
     depends_on:
       - mongo-config
       - mongo-shard1
       - mongo-shard2
+      - mongo-shard1-replica
+      - mongo-shard2-replica
     networks:
       - bd_default
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   mongo-express:
     image: mongo-express
@@ -114,16 +219,14 @@ services:
     ports:
       - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: "mongodb://root:rootpass@mongodb:27017"  # ← Исправлено: с root логином
+      ME_CONFIG_MONGODB_URL: "mongodb://mongos:27017"
       ME_CONFIG_BASICAUTH_USERNAME: "admin"
       ME_CONFIG_BASICAUTH_PASSWORD: "admin"
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpass
     networks:
       - bd_default
     depends_on:
-      mongodb:
-        condition: service_healthy            # ← Ждём полной готовности
+      mongos:
+        condition: service_started
     restart: unless-stopped
 
   news-api:
@@ -134,8 +237,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      mongodb:
-        condition: service_healthy            # ← КЛЮЧЕВОЕ: ждём, пока MongoDB полностью готова
+      mongos:
+        condition: service_healthy
     networks:
       - bd_default
     restart: unless-stopped
@@ -147,7 +250,10 @@ volumes:
   grafana_data:
   mongo_config_data:
   mongo_shard1_data:
+  mongo_shard1_replica_data:
   mongo_shard2_data:
+  mongo_shard2_replica_data:
+  redis_data:        # Новый volume для Redis
 
 networks:
   bd_default:
