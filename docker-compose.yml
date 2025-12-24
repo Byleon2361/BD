@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   # ==================== POSTGRESQL ====================
   postgres:
@@ -21,29 +20,29 @@ services:
         # Запускаем стандартный entrypoint в фоне
         docker-entrypoint.sh postgres &
         PG_PID=$!
-        
+       
         # Ждем запуска БД
         until pg_isready -U postgres; do
           echo 'Waiting for primary to be ready...'
           sleep 2
         done
-        
+       
         # Настраиваем репликацию
         echo 'Configuring replication...'
         psql -U postgres -c \"CREATE USER replicator WITH REPLICATION PASSWORD 'replica_pass';\" 2>/dev/null || true
-        psql -U postgres -c \"ALTER SYSTEM SET wal_level = replica;\" 
-        psql -U postgres -c \"ALTER SYSTEM SET max_wal_senders = 10;\" 
-        psql -U postgres -c \"ALTER SYSTEM SET max_replication_slots = 10;\" 
-        
+        psql -U postgres -c \"ALTER SYSTEM SET wal_level = replica;\"
+        psql -U postgres -c \"ALTER SYSTEM SET max_wal_senders = 10;\"
+        psql -U postgres -c \"ALTER SYSTEM SET max_replication_slots = 10;\"
+       
         # Добавляем правило в pg_hba.conf
         echo 'host replication replicator all md5' >> /var/lib/postgresql/data/pg_hba.conf
         echo 'host all replicator all md5' >> /var/lib/postgresql/data/pg_hba.conf
-        
+       
         # Перезагружаем конфигурацию
-        psql -U postgres -c \"SELECT pg_reload_conf();\" 
-        
+        psql -U postgres -c \"SELECT pg_reload_conf();\"
+       
         echo 'Primary database configured for replication'
-        
+       
         # Ждем завершения основного процесса PostgreSQL
         wait $PG_PID
       "
@@ -68,29 +67,42 @@ services:
           echo 'Waiting for primary database...'
           sleep 5
         done
-        
+       
         # Даем дополнительное время для полной инициализации
         sleep 10
-        
+       
         echo 'Primary database is ready, setting up replica...'
-        
+       
         # Очищаем директорию данных реплики
         rm -rf /var/lib/postgresql/data/*
-        
+       
         # Создаем базовую копию с правильными параметрами
         PGPASSWORD=replica_pass pg_basebackup -h postgres -U replicator -p 5432 -D /var/lib/postgresql/data -P -R -X stream -C -S replica_slot
-        
+       
         # Устанавливаем правильные права
         chown -R postgres:postgres /var/lib/postgresql/data/
-        
+       
         # Настраиваем файл standby.signal для режима standby
         touch /var/lib/postgresql/data/standby.signal
-        
+       
         echo 'Replica setup complete, starting PostgreSQL...'
-        
+       
         # Запускаем PostgreSQL
         exec docker-entrypoint.sh postgres
       "
+
+  # ==================== REDIS ====================
+  redis:
+    image: redis:7-alpine
+    container_name: bd-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bd_default
+    command: redis-server --appendonly yes  # Включаем AOF для персистентности
+    restart: unless-stopped
 
   # ==================== MONITORING ====================
   postgres-exporter:
@@ -241,6 +253,7 @@ volumes:
   mongo_shard1_replica_data:
   mongo_shard2_data:
   mongo_shard2_replica_data:
+  redis_data:        # Новый volume для Redis
 
 networks:
   bd_default:
