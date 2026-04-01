@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package com.newsaggregator.events;
+
+option java_package = "com.newsaggregator.events";
+option java_outer_classname = "NewsEventProto";
+
+// ─── Enum: event types ────────────────────────────────────────────────────────
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  ARTICLE_PUBLISHED      = 1;
+  ARTICLE_VIEWED         = 2;
+  ARTICLE_LIKED          = 3;
+  ARTICLE_SHARED         = 4;
+  ARTICLE_DELETED        = 5;
+}
+
+// ─── Article payload ──────────────────────────────────────────────────────────
+message ArticlePayload {
+  int64  article_id    = 1;
+  string title         = 2;
+  int32  category_id   = 3;
+  string category_name = 4;
+  int32  source_id     = 5;
+  string source_name   = 6;
+  int32  author_id     = 7;
+  int32  views_count   = 8;
+  int32  likes_count   = 9;
+  string publish_date  = 10;
+}
+
+// ─── Metadata ─────────────────────────────────────────────────────────────────
+message EventMetadata {
+  string correlation_id = 1;
+  string user_id        = 2;  // optional, empty string = absent
+  string ip_address     = 3;
+  string user_agent     = 4;
+  string environment    = 5;
+}
+
+// ─── Root message ─────────────────────────────────────────────────────────────
+message NewsEvent {
+  string          event_id   = 1;
+  EventType       event_type = 2;
+  string          entity_id  = 3;
+  int64           timestamp  = 4;  // millis since epoch
+  string          source     = 5;
+  string          version    = 6;
+  ArticlePayload  payload    = 7;
+  EventMetadata   metadata   = 8;
+}

@@ -1,0 +1,79 @@
+{
+  "type": "record",
+  "name": "NewsEvent",
+  "namespace": "com.newsaggregator.events",
+  "doc": "Base news event schema with all required metadata fields",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "Unique UUID for each event"
+    },
+    {
+      "name": "eventType",
+      "type": {
+        "type": "enum",
+        "name": "EventType",
+        "symbols": ["ArticlePublished", "ArticleViewed", "ArticleLiked", "ArticleShared", "ArticleDeleted"]
+      },
+      "doc": "Type of news event"
+    },
+    {
+      "name": "entityId",
+      "type": "string",
+      "doc": "ID of the entity this event is about (e.g. article ID)"
+    },
+    {
+      "name": "timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Event timestamp in milliseconds since epoch"
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "doc": "System that generated the event (e.g. news-api, mobile-app)"
+    },
+    {
+      "name": "version",
+      "type": "string",
+      "default": "1.0",
+      "doc": "Schema version"
+    },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "ArticlePayload",
+        "fields": [
+          { "name": "articleId",   "type": "long" },
+          { "name": "title",       "type": "string" },
+          { "name": "categoryId",  "type": "int" },
+          { "name": "categoryName","type": "string" },
+          { "name": "sourceId",    "type": "int" },
+          { "name": "sourceName",  "type": "string" },
+          { "name": "authorId",    "type": "int" },
+          { "name": "viewsCount",  "type": "int", "default": 0 },
+          { "name": "likesCount",  "type": "int", "default": 0 },
+          { "name": "publishDate", "type": "string" }
+        ]
+      },
+      "doc": "Event-specific payload data"
+    },
+    {
+      "name": "metadata",
+      "type": {
+        "type": "record",
+        "name": "EventMetadata",
+        "fields": [
+          { "name": "correlationId", "type": "string" },
+          { "name": "userId",        "type": ["null", "string"], "default": null },
+          { "name": "ipAddress",     "type": ["null", "string"], "default": null },
+          { "name": "userAgent",     "type": ["null", "string"], "default": null },
+          { "name": "environment",   "type": "string", "default": "production" }
+        ]
+      },
+      "doc": "Event metadata for tracing and debugging"
+    }
+  ]
+}
