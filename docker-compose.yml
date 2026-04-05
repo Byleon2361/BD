@@ -177,7 +177,27 @@ services:
     networks:
       - kafka_net
     restart: unless-stopped
-
+    
+  # ==================== CONSUMER: ClickHouse ====================
+  consumer-clickhouse:
+    build:
+      context: ./consumers
+      dockerfile: Dockerfile
+    container_name: consumer-clickhouse
+    depends_on:
+      - kafka
+      - clickhouse
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CONSUMER_GROUP: clickhouse-group
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_DB: news_analytics
+      CLICKHOUSE_USER: analytics
+      CLICKHOUSE_PASSWORD: analytics_pass
+    networks:
+      - kafka_net
+    restart: unless-stopped
 # ==================== CLICKHOUSE ====================
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
