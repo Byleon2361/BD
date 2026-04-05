@@ -1,2 +1,2 @@
 faststream[kafka]==0.5.8
-pydantic>=2.0
+pydantic>=2.0,<2.6
