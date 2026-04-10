@@ -32,30 +32,22 @@ services:
       KAFKA_LOG_RETENTION_HOURS: 168
     networks:
       - kafka_net
-
-  # ==================== SCHEMA REGISTRY (Avro) ====================
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.5.0
-    container_name: schema-registry
-    depends_on:
-      - kafka
-    ports:
-      - "8081:8081"
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-    networks:
-      - kafka_net
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ==================== KAFKA CONNECT ====================
   kafka-connect:
     image: confluentinc/cp-kafka-connect:7.5.0
     container_name: kafka-connect
     depends_on:
-      - kafka
-      - schema-registry
-      - postgres
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_started
     ports:
       - "8083:8083"
     environment:
@@ -70,8 +62,8 @@ services:
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
-      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
     command:
       - bash
@@ -88,19 +80,17 @@ services:
     container_name: kafka-ui
     depends_on:
       - kafka
-      - schema-registry
     ports:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
     networks:
       - kafka_net
 
-  # ==================== POSTGRESQL (из оригинального проекта) ====================
+  # ==================== POSTGRESQL ====================
   postgres:
     image: postgres:15
     container_name: bd-postgres-1
@@ -116,18 +106,17 @@ services:
     networks:
       - kafka_net
 
-  # ==================== PRODUCER (FastStream) ====================
+  # ==================== PRODUCER ====================
   producer:
     build:
       context: ./producer
       dockerfile: Dockerfile
     container_name: news-producer
     depends_on:
-      - kafka
-      - schema-registry
+      kafka:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
     networks:
       - kafka_net
     restart: unless-stopped
@@ -139,7 +128,8 @@ services:
       dockerfile: Dockerfile
     container_name: consumer-notifications
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CONSUMER_GROUP: notifications-group
@@ -154,8 +144,10 @@ services:
       dockerfile: Dockerfile
     container_name: consumer-analytics
     depends_on:
-      - kafka
-      - postgres
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_started
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CONSUMER_GROUP: analytics-group
@@ -171,12 +163,31 @@ services:
       dockerfile: Dockerfile
     container_name: streams-app
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     networks:
       - kafka_net
     restart: unless-stopped
+
+  # ==================== CONNECT SETUP ====================
+  connect-setup:
+    image: curlimages/curl:latest
+    container_name: connect-setup
+    depends_on:
+      - kafka-connect
+    networks:
+      - kafka_net
+    restart: "no"
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for Kafka Connect...' &&
+        sleep 60 &&
+        sh /scripts/setup-connectors.sh
+      "
+    volumes:
+      - ./connect:/scripts
 
 volumes:
   postgres_data:
