@@ -1,1 +1,1 @@
-faust-streaming==0.10.14
+kafka-python==2.0.2

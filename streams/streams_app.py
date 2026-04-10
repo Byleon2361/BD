@@ -1,217 +1,215 @@
 """
-News Aggregator — Kafka Streams (Python / Faust)
-================================================
-Implements all required stream operations:
+News Aggregator - Kafka Streams (pure kafka-python, без Faust)
+Faust несовместим с Python 3.11 из-за mode.utils.contexts.nullcontext.
+Реализуем то же самое вручную через kafka-python KafkaConsumer/KafkaProducer.
 
-1. TRANSFORMATION  — enrich ArticleViewed events with category label
-2. AGGREGATION     — count total views per article (KTable)
-3. WINDOWED COUNT  — views per category per 1-minute tumbling window
-4. OUTPUT TOPICS:
-   - news.enriched.views      ← transformed events
-   - news.stats.article-views ← aggregated view counts
-   - news.stats.category-windows ← windowed counts
+1. ТРАНСФОРМАЦИЯ  — обогащаем ArticleViewed полем categoryLabel + engagementScore
+2. АГРЕГАЦИЯ      — считаем суммарные просмотры по article_id (в памяти, KTable-style)
+3. ОКОННОЕ ВЫЧИСЛЕНИЕ — просмотры по категории за последнюю 1 минуту (tumbling window)
+4. Результаты → отдельные топики
 """
 
-import logging
 import json
-import faust
+import logging
+import time
+import threading
+from collections import defaultdict
 from datetime import datetime, timezone
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s")
+from kafka import KafkaConsumer, KafkaProducer
+from kafka.errors import KafkaError
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [streams] %(message)s",
+)
 logger = logging.getLogger("news-streams")
 
-# ─── Faust App ────────────────────────────────────────────────────────────────
-app = faust.App(
-    "news-streams",
-    broker="kafka://kafka:29092",
-    value_serializer="json",
-    store="memory://",
-    topic_partitions=4,
-)
+BOOTSTRAP = "kafka:29092"
 
-# ─── Topic Declarations ───────────────────────────────────────────────────────
-views_topic     = app.topic("news.views.events",           value_type=dict)
-reactions_topic = app.topic("news.reactions.events",       value_type=dict)
+# Input topics
+TOPIC_VIEWS     = "news.views.events"
+TOPIC_REACTIONS = "news.reactions.events"
 
-# Output topics (results)
-enriched_topic   = app.topic("news.enriched.views",           value_type=dict)
-agg_views_topic  = app.topic("news.stats.article-views",      value_type=dict)
-cat_window_topic = app.topic("news.stats.category-windows",   value_type=dict)
+# Output topics
+TOPIC_ENRICHED = "news.enriched.views"
+TOPIC_AGG      = "news.stats.article-views"
+TOPIC_WINDOW   = "news.stats.category-windows"
 
-# ─── KTable: total views per article ─────────────────────────────────────────
-article_view_table = app.Table(
-    "article-view-counts",
-    default=int,
-    partitions=4,
-)
-
-# KTable: likes per article
-article_like_table = app.Table(
-    "article-like-counts",
-    default=int,
-    partitions=4,
-)
-
-# Windowed KTable: views per category in 1-minute tumbling windows
-category_window_table = app.Table(
-    "category-view-windows",
-    default=int,
-    partitions=4,
-).tumbling(60.0, expires=faust.windows.Window(60.0))
-
-# ─── Category map (mirrors DB seed data) ─────────────────────────────────────
 CATEGORY_LABELS = {
-    1: "politics",
-    2: "sports",
-    3: "technology",
-    4: "entertainment",
-    5: "business",
-    6: "health",
-    7: "science",
+    1: "politics", 2: "sports", 3: "technology",
+    4: "entertainment", 5: "business", 6: "health", 7: "science",
 }
 
+WINDOW_SECONDS = 60  # tumbling window size
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGENT 1: TRANSFORMATION
-# Enriches raw ArticleViewed events with human-readable category label
-# and computed engagement score.
-# Output → news.enriched.views
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.agent(views_topic)
-async def enrich_view_events(stream):
-    """
-    Transformation: add categoryLabel + engagementScore to each view event.
-    """
-    async for event in stream:
+
+# ─── State (in-memory KTables) ────────────────────────────────────────────────
+article_view_counts = defaultdict(int)   # article_id -> total views
+article_like_counts = defaultdict(int)   # article_id -> total likes
+
+# windowed: category_id -> list of timestamps in current window
+window_timestamps = defaultdict(list)
+
+state_lock = threading.Lock()
+
+
+def make_producer():
+    while True:
         try:
-            payload      = event.get("payload", {})
-            category_id  = payload.get("categoryId", 0)
-            views_count  = payload.get("viewsCount", 0)
-            likes_count  = payload.get("likesCount", 0)
-
-            # ── Transform 1: human-readable category ──────────────────────────
-            category_label = CATEGORY_LABELS.get(category_id, "unknown")
-
-            # ── Transform 2: engagement score ─────────────────────────────────
-            # score = likes / views (0–1), clamped
-            engagement_score = round(
-                min(likes_count / max(views_count, 1), 1.0), 4
+            p = KafkaProducer(
+                bootstrap_servers=BOOTSTRAP,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8") if k else None,
+                acks="all",
+                retries=5,
             )
+            logger.info("Producer connected")
+            return p
+        except Exception as e:
+            logger.warning(f"Producer connect failed: {e}, retrying in 5s...")
+            time.sleep(5)
 
+
+def make_consumer(group_id, *topics):
+    while True:
+        try:
+            c = KafkaConsumer(
+                *topics,
+                bootstrap_servers=BOOTSTRAP,
+                group_id=group_id,
+                enable_auto_commit=True,
+                auto_offset_reset="earliest",
+                value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+                key_deserializer=lambda k: k.decode("utf-8") if k else None,
+                session_timeout_ms=30000,
+                request_timeout_ms=40000,
+            )
+            logger.info(f"Consumer '{group_id}' connected to {topics}")
+            return c
+        except Exception as e:
+            logger.warning(f"Consumer connect failed: {e}, retrying in 5s...")
+            time.sleep(5)
+
+
+# ─── 1. ТРАНСФОРМАЦИЯ + АГРЕГАЦИЯ + ОКОННОЕ ВЫЧИСЛЕНИЕ ───────────────────────
+def run_views_stream():
+    """
+    Читает news.views.events.
+    - Трансформация: добавляет categoryLabel и engagementScore → news.enriched.views
+    - Агрегация: считает суммарные просмотры по статье → news.stats.article-views
+    - Окно: считает просмотры по категории за 1 мин → news.stats.category-windows
+    """
+    producer = make_producer()
+    consumer = make_consumer("streams-views-group", TOPIC_VIEWS)
+
+    for msg in consumer:
+        try:
+            event   = msg.value
+            payload = event.get("payload", {})
+            cat_id  = payload.get("categoryId", 0)
+            article_id = str(event.get("entityId", "unknown"))
+            views   = payload.get("viewsCount", 0)
+            likes   = payload.get("likesCount", 0)
+
+            # ── 1. ТРАНСФОРМАЦИЯ ──────────────────────────────────────────────
+            cat_label = CATEGORY_LABELS.get(cat_id, "unknown")
+            engagement = round(min(likes / max(views, 1), 1.0), 4)
             enriched = {
                 **event,
-                "enriched": True,
-                "categoryLabel":    category_label,
-                "engagementScore":  engagement_score,
-                "processedAt":      datetime.now(timezone.utc).isoformat(),
+                "enriched":        True,
+                "categoryLabel":   cat_label,
+                "engagementScore": engagement,
+                "processedAt":     datetime.now(timezone.utc).isoformat(),
             }
+            producer.send(TOPIC_ENRICHED, key=article_id, value=enriched)
 
-            await enriched_topic.send(
-                key=event.get("entityId", "unknown"),
-                value=enriched,
-            )
+            # ── 2. АГРЕГАЦИЯ (running total) ──────────────────────────────────
+            with state_lock:
+                article_view_counts[article_id] += 1
+                total = article_view_counts[article_id]
 
-            logger.debug(
-                f"[TRANSFORM] article={event.get('entityId')} "
-                f"category={category_label} score={engagement_score}"
-            )
-
-        except Exception as exc:
-            logger.error(f"[TRANSFORM] Error: {exc}", exc_info=True)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGENT 2: AGGREGATION
-# Counts total views per article (stateful KTable)
-# Output → news.stats.article-views
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.agent(views_topic)
-async def aggregate_article_views(stream):
-    """
-    Aggregation: running total of views per article_id stored in KTable.
-    Emits updated count to output topic on every event.
-    """
-    async for event in stream:
-        try:
-            article_id = str(event.get("entityId", "unknown"))
-
-            # ── Aggregation: increment KTable counter ─────────────────────────
-            article_view_table[article_id] += 1
-            total_views = article_view_table[article_id]
-
-            result = {
-                "articleId":   article_id,
-                "totalViews":  total_views,
-                "updatedAt":   datetime.now(timezone.utc).isoformat(),
+            agg_result = {
+                "articleId":  article_id,
+                "totalViews": total,
+                "updatedAt":  datetime.now(timezone.utc).isoformat(),
             }
+            producer.send(TOPIC_AGG, key=article_id, value=agg_result)
 
-            await agg_views_topic.send(key=article_id, value=result)
+            if total % 50 == 0:
+                logger.info(f"[AGG] article={article_id} total_views={total}")
 
-            if total_views % 100 == 0:
-                logger.info(f"[AGGREGATE] article={article_id} total_views={total_views}")
-
-        except Exception as exc:
-            logger.error(f"[AGGREGATE] Error: {exc}", exc_info=True)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGENT 3: WINDOWED COMPUTATION
-# Counts views per category in 1-minute tumbling windows.
-# Output → news.stats.category-windows
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.agent(views_topic)
-async def windowed_category_views(stream):
-    """
-    Windowed aggregation: count views per category per 1-minute tumbling window.
-    Emits window snapshot on every event.
-    """
-    async for event in stream.group_by(
-        lambda e: str(e.get("payload", {}).get("categoryId", 0))
-    ):
-        try:
-            payload     = event.get("payload", {})
-            category_id = str(payload.get("categoryId", 0))
-            category    = CATEGORY_LABELS.get(int(category_id), "unknown")
-
-            # ── Windowed count (1-minute tumbling window) ─────────────────────
-            category_window_table[category_id] += 1
-            window_count = category_window_table[category_id].current()
+            # ── 3. ОКОННОЕ ВЫЧИСЛЕНИЕ (1-min tumbling window) ─────────────────
+            now_ts = time.time()
+            cat_key = str(cat_id)
+            with state_lock:
+                # Убираем метки старше 1 минуты
+                window_timestamps[cat_key] = [
+                    t for t in window_timestamps[cat_key]
+                    if now_ts - t < WINDOW_SECONDS
+                ]
+                window_timestamps[cat_key].append(now_ts)
+                window_count = len(window_timestamps[cat_key])
 
             window_result = {
-                "categoryId":    category_id,
-                "categoryName":  category,
-                "windowCount":   window_count,
-                "windowType":    "tumbling-1min",
-                "windowEnd":     datetime.now(timezone.utc).isoformat(),
+                "categoryId":   cat_id,
+                "categoryName": cat_label,
+                "windowCount":  window_count,
+                "windowType":   "tumbling-1min",
+                "windowEnd":    datetime.now(timezone.utc).isoformat(),
             }
+            producer.send(TOPIC_WINDOW, key=cat_key, value=window_result)
 
-            await cat_window_topic.send(key=category_id, value=window_result)
             logger.debug(
-                f"[WINDOW] category={category} count_in_window={window_count}"
+                f"[STREAMS] article={article_id} cat={cat_label} "
+                f"total_views={total} window_count={window_count}"
             )
 
         except Exception as exc:
-            logger.error(f"[WINDOW] Error: {exc}", exc_info=True)
+            logger.error(f"[STREAMS] Error processing message: {exc}", exc_info=True)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGENT 4: REACTIONS AGGREGATION
-# Counts likes per article (bonus aggregation)
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.agent(reactions_topic)
-async def aggregate_article_likes(stream):
-    """Aggregation: running like count per article in KTable."""
-    async for event in stream:
+# ─── 2. АГРЕГАЦИЯ ЛАЙКОВ ─────────────────────────────────────────────────────
+def run_reactions_stream():
+    """Читает news.reactions.events, агрегирует лайки по статье."""
+    consumer = make_consumer("streams-reactions-group", TOPIC_REACTIONS)
+    for msg in consumer:
         try:
+            event      = msg.value
             article_id = str(event.get("entityId", "unknown"))
-            article_like_table[article_id] += 1
-            logger.debug(
-                f"[LIKES] article={article_id} total_likes={article_like_table[article_id]}"
-            )
+            with state_lock:
+                article_like_counts[article_id] += 1
+                total_likes = article_like_counts[article_id]
+            logger.info(f"[LIKES] article={article_id} total_likes={total_likes}")
         except Exception as exc:
             logger.error(f"[LIKES] Error: {exc}", exc_info=True)
 
 
-# ─── Entrypoint ───────────────────────────────────────────────────────────────
+# ─── Периодический лог состояния ─────────────────────────────────────────────
+def run_stats_logger():
+    while True:
+        time.sleep(30)
+        with state_lock:
+            total_articles = len(article_view_counts)
+            top = sorted(article_view_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        logger.info(f"[STATE] tracked_articles={total_articles} top3={top}")
+
+
 if __name__ == "__main__":
-    app.main()
+    logger.info("Kafka Streams app starting (pure kafka-python)...")
+
+    # Подождём пока Kafka поднимется
+    time.sleep(10)
+
+    threads = [
+        threading.Thread(target=run_views_stream,     daemon=True, name="views-stream"),
+        threading.Thread(target=run_reactions_stream, daemon=True, name="reactions-stream"),
+        threading.Thread(target=run_stats_logger,     daemon=True, name="stats-logger"),
+    ]
+    for t in threads:
+        t.start()
+        logger.info(f"Started thread: {t.name}")
+
+    # Держим главный поток живым
+    for t in threads:
+        t.join()
